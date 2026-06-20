@@ -1,0 +1,37 @@
+[project]
+name = "cart-scout"
+version = "0.1.0"
+description = "RL context manager for real-browser shopping agents"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+  "hud-python[agents]>=0.6.5",
+  "playwright>=1.44",
+  "pydantic>=2.6,<3",
+  "fastapi>=0.104",
+  "uvicorn[standard]>=0.24",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-asyncio>=0.23",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hud]
+image = "cart-scout:dev"
+
+[tool.hatch.build]
+include = [
+  "cart_scout/**/*.py",
+  "fireworks_rft/**/*.py",
+  "env.py",
+  "tasks.py",
+  "train_hud.py",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

@@ -1,0 +1,34 @@
+# syntax=docker/dockerfile:1
+FROM hudevals/hud-browser-base:latest AS setup
+
+WORKDIR /app
+
+RUN wget -q -O /tmp/BrowserOS.deb https://cdn.browseros.com/download/BrowserOS.deb && \
+    apt-get update && \
+    apt-get install -y sudo /tmp/BrowserOS.deb && \
+    rm /tmp/BrowserOS.deb && \
+    rm -rf /var/lib/apt/lists/*
+
+ENV BROWSEROS_BIN=/usr/bin/browseros
+
+COPY pyproject.toml /app/
+COPY cart_scout/ /app/cart_scout/
+COPY fireworks_rft/ /app/fireworks_rft/
+COPY env.py tasks.py train_hud.py /app/
+COPY data/ /app/data/
+COPY tests/ /app/tests/
+
+RUN uv pip install --system --break-system-packages ".[dev]"
+
+RUN chown -R ubuntu:ubuntu /home/ubuntu && \
+    chmod 700 /app/env.py /app/tasks.py
+
+ENV HUD_LOG_STREAM="stderr"
+ENV PYTHONUNBUFFERED="1"
+ENV DISPLAY=":1"
+ENV PYTHONPATH=/app
+
+EXPOSE 8765
+EXPOSE 8080
+
+CMD ["hud", "serve", "env:env", "--host", "0.0.0.0", "--port", "8765"]
