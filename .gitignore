@@ -3,6 +3,7 @@
 __pycache__/
 .pytest_cache/
 .ruff_cache/
+.hud_eval.toml
 *.pyc
 dist/
 build/

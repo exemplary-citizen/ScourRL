@@ -179,7 +179,7 @@ async def shopping_context_task(
         token_budget=token_budget,
         require_cart=require_cart,
     )
-    search_url = f"https://www.google.com/search?q={quote_plus(instruction + ' ' + ' '.join(allowed_domains))}"
+    search_url = _start_url(instruction, allowed_domains)
     await _navigate(search_url)
     prompt = f"""
 You are CartScout, a shopping context scout for a browser agent.
@@ -201,6 +201,12 @@ Hard safety rules:
 - Do not bypass CAPTCHA or bot checks.
 - Do not buy regulated, age-restricted, medical, supplement, gift-card, weapon, alcohol, or nicotine products.
 - Stop before checkout and return JSON only.
+
+Browser starting point:
+- The browser has been opened to: {search_url}
+- Prefer visible Target or Amazon product/search pages over general web search.
+- If a browser update, new-tab, sign-in, CAPTCHA, location, or cookie prompt blocks progress, do not fight it. Navigate directly to an allowed retailer search URL or use the evidence you already have.
+- As soon as you have one plausible product with price plus at least one supporting quote, stop browsing and return the JSON packet. Do not spend the whole step budget trying to optimize the choice.
 
 Return exactly one JSON object matching this schema:
 {{
@@ -226,3 +232,13 @@ Return exactly one JSON object matching this schema:
     result = score_purchase_packet(answer, spec)
     logger.info("task=%s reward=%.3f breakdown=%s reasons=%s", task_id, result.score, result.breakdown, result.reasons)
     yield result.score
+
+
+def _start_url(instruction: str, allowed_domains: list[str]) -> str:
+    query = quote_plus(instruction)
+    domains = {domain.lower() for domain in allowed_domains}
+    if "target.com" in domains:
+        return f"https://www.target.com/s?searchTerm={query}"
+    if "amazon.com" in domains:
+        return f"https://www.amazon.com/s?k={query}"
+    return f"https://www.google.com/search?q={quote_plus(instruction + ' ' + ' '.join(allowed_domains))}"
