@@ -142,6 +142,51 @@ Known smoke jobs:
 - `https://hud.ai/jobs/1b452324782d42bc9a7097665e87fa75` - v1 deploy, completed, reward `0.0`, no JSON packet.
 - `https://hud.ai/jobs/da1bd00a3414409b8193fbcde2d1466f` - v2 deploy, long RFB rollout, failed grading after connection loss.
 
+## Browser Use / CDP Harness
+
+For a better browser-agent baseline, use Browser Use over the environment's CDP capability instead
+of the default `claude` RFB/computer-use path:
+
+```bash
+uv sync --extra dev
+uv run python scripts/run_browser_use_eval.py \
+  --provider anthropic \
+  --model claude-sonnet-4-5 \
+  --api-key-env ANTHROPIC_API_KEY \
+  --task-id usb-c-charger-30w-under-40 \
+  --max-steps 35
+```
+
+Provider options:
+
+- `anthropic` - Browser Use + Claude; requires `ANTHROPIC_API_KEY`.
+- `openai` - Browser Use + OpenAI; requires `OPENAI_API_KEY`.
+- `openai-like` - Browser Use + any OpenAI-compatible endpoint. Use this for local/vLLM/SGLang RL policy servers:
+
+```bash
+export OPENAI_LIKE_BASE_URL=http://127.0.0.1:8000/v1
+export OPENAI_LIKE_API_KEY=dummy
+uv run python scripts/run_browser_use_eval.py \
+  --provider openai-like \
+  --model cart-scout-policy \
+  --task-id usb-c-charger-30w-under-40
+```
+
+- `ollama` - Browser Use + local Ollama:
+
+```bash
+uv run python scripts/run_browser_use_eval.py \
+  --provider ollama \
+  --model qwen2.5:14b \
+  --base-url http://127.0.0.1:11434
+```
+
+Recommendation for RL: keep HUD as the environment/reward system, but do not train against raw RFB
+desktop actions. Train a policy over a compact CDP/DOM action space such as `search`, `open_url`,
+`click_ref`, `extract_page`, `find_text`, `emit_packet`, and `stop`. Browser Use is a good interim
+baseline and data-collection harness; the trainable policy should eventually use the same structured
+observations/actions directly so rewards map cleanly to model behavior.
+
 ## Reward
 
 Terminal reward is bounded to `[0, 1]`:
