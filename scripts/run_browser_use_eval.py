@@ -3,12 +3,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import json
 import logging
 import os
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+import mcp.types as mcp_types
 from hud.agents.base import Agent
 from hud.agents.types import AgentStep
 from hud.eval.runtime import HUDRuntime
@@ -27,6 +29,10 @@ class BrowserUseCDPAgent(Agent):
     max_steps: int
     api_key: str | None = None
     base_url: str | None = None
+    use_thinking: bool = True
+    flash_mode: bool = False
+    trace_screenshots: bool = True
+    generate_gif: bool = False
 
     async def __call__(self, run):
         from browser_use import Agent as BrowserUseAgent
@@ -42,7 +48,21 @@ class BrowserUseCDPAgent(Agent):
             base_url=self.base_url,
         )
         browser: Any = Browser(cdp_url=cdp_url)
-        agent = BrowserUseAgent(task=run.prompt_text, llm=llm, browser=browser)
+        agent = BrowserUseAgent(
+            task=run.prompt_text,
+            llm=llm,
+            browser=browser,
+            register_new_step_callback=lambda state, output, step: _record_browser_use_step(
+                run,
+                state=state,
+                output=output,
+                step=step,
+                include_screenshot=self.trace_screenshots,
+            ),
+            use_thinking=self.use_thinking,
+            flash_mode=self.flash_mode,
+            generate_gif=self.generate_gif,
+        )
 
         try:
             history: Any = await agent.run(max_steps=self.max_steps)
@@ -76,6 +96,52 @@ class BrowserUseCDPAgent(Agent):
                 error=content if successful is False else None,
             )
         )
+
+
+def _record_browser_use_step(
+    run: Any,
+    *,
+    state: Any,
+    output: Any,
+    step: int,
+    include_screenshot: bool,
+) -> None:
+    actions = [
+        action.model_dump(exclude_none=True, mode="json") if hasattr(action, "model_dump") else action
+        for action in getattr(output, "action", [])
+    ]
+    text = {
+        "harness": "browser-use-cdp",
+        "step": step,
+        "url": getattr(state, "url", None),
+        "title": getattr(state, "title", None),
+        "evaluation_previous_goal": getattr(output, "evaluation_previous_goal", None),
+        "memory": getattr(output, "memory", None),
+        "next_goal": getattr(output, "next_goal", None),
+        "actions": actions,
+    }
+    messages: list[mcp_types.PromptMessage] = [
+        mcp_types.PromptMessage(
+            role="assistant",
+            content=mcp_types.TextContent(
+                type="text",
+                text=json.dumps(text, indent=2, ensure_ascii=True),
+            ),
+        )
+    ]
+    screenshot = getattr(state, "screenshot", None)
+    if include_screenshot and isinstance(screenshot, str) and screenshot:
+        messages.append(
+            mcp_types.PromptMessage(
+                role="assistant",
+                content=mcp_types.ImageContent(
+                    type="image",
+                    mimeType="image/png",
+                    data=screenshot,
+                ),
+            )
+        )
+    run.record(Step(source="agent", messages=messages, extra=text))
 
 
 def _build_llm(provider: str, model: str, api_key: str | None, base_url: str | None):
@@ -124,6 +190,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-steps", type=int, default=35)
     parser.add_argument("--runtime-timeout", type=float, default=1800.0)
     parser.add_argument("--rollout-timeout", type=float, default=1800.0)
+    parser.add_argument("--no-thinking", action="store_true", help="Disable Browser Use's thinking field in model outputs.")
+    parser.add_argument("--flash-mode", action="store_true", help="Use Browser Use's smaller memory/action output schema.")
+    parser.add_argument("--no-trace-screenshots", action="store_true", help="Do not attach screenshots to HUD trace steps.")
+    parser.add_argument("--generate-gif", action="store_true", help="Ask Browser Use to write a local GIF replay artifact.")
     return parser.parse_args()
 
 
@@ -142,6 +212,10 @@ async def main() -> None:
         max_steps=args.max_steps,
         api_key=api_key,
         base_url=args.base_url,
+        use_thinking=not args.no_thinking,
+        flash_mode=args.flash_mode,
+        trace_screenshots=not args.no_trace_screenshots,
+        generate_gif=args.generate_gif,
     )
     job = await taskset.run(
         agent,

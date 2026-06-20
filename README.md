@@ -157,6 +157,27 @@ uv run python scripts/run_browser_use_eval.py \
   --max-steps 35
 ```
 
+This harness records Browser Use actions, URLs, and screenshots into HUD trace steps. It will not
+look exactly like the native RFB/computer-use replay because Browser Use drives Chrome over CDP, not
+desktop mouse/keyboard screenshots. Use the native `hud eval ... claude` path when the goal is to
+watch a human-like desktop replay; use this CDP path when the goal is a trainable browser-native
+action loop.
+
+HUD Gateway example with a trainable OpenAI-compatible model:
+
+```bash
+set -a; source .env; set +a
+uv run python scripts/run_browser_use_eval.py \
+  --provider openai-like \
+  --model Qwen/Qwen3-30B-A3B \
+  --api-key-env HUD_API_KEY \
+  --base-url https://inference.beta.hud.ai \
+  --task-id usb-c-charger-30w-under-40 \
+  --max-steps 18 \
+  --no-thinking \
+  --flash-mode
+```
+
 Provider options:
 
 - `anthropic` - Browser Use + Claude; requires `ANTHROPIC_API_KEY`.
@@ -169,7 +190,9 @@ export OPENAI_LIKE_API_KEY=dummy
 uv run python scripts/run_browser_use_eval.py \
   --provider openai-like \
   --model cart-scout-policy \
-  --task-id usb-c-charger-30w-under-40
+  --task-id usb-c-charger-30w-under-40 \
+  --no-thinking \
+  --flash-mode
 ```
 
 - `ollama` - Browser Use + local Ollama:
