@@ -71,15 +71,47 @@ The offline tests still run locally.
 ## Test
 
 ```bash
-uv run pytest -q
+uv run --extra dev pytest -q
 ```
 
 ## HUD Evaluation
 
+This repo is linked to the hosted HUD environment:
+
+- Environment: `cart-scout`
+- HUD registry ID: `bc9c854f-de6a-4613-b38e-354f982d6093`
+- HUD page: `https://hud.ai/environments/bc9c854f-de6a-4613-b38e-354f982d6093`
+
+Create a local `.env` with your HUD key:
+
 ```bash
 cp .env.example .env
-hud deploy .
-hud eval tasks.py claude --runtime hud --full --group 3 --max-steps 40
+# edit .env and set HUD_API_KEY=...
+```
+
+Deploy without uploading `.env` into the runtime image:
+
+```bash
+uv run hud deploy . --no-env
+```
+
+Run one smoke task:
+
+```bash
+uv run hud eval tasks.py claude --runtime hud \
+  --task-ids usb-c-charger-30w-under-40 \
+  --max-steps 80 \
+  -y
+```
+
+Run the full taskset with grouped rollouts:
+
+```bash
+uv run hud eval tasks.py claude --runtime hud \
+  --full \
+  --group 3 \
+  --max-steps 80 \
+  -y
 ```
 
 For a Linux/amd64 local run:
@@ -87,10 +119,28 @@ For a Linux/amd64 local run:
 ```bash
 docker build -f Dockerfile.hud -t cart-scout:dev .
 docker run -d -p 8765:8765 -p 8080:8080 cart-scout:dev
-hud eval tasks.py claude --runtime tcp://127.0.0.1:8765 --task-ids usb-c-charger-30w-under-40 -y
+uv run hud eval tasks.py claude --runtime tcp://127.0.0.1:8765 --task-ids usb-c-charger-30w-under-40 -y
 ```
 
 Open `http://localhost:8080/vnc.html` to watch the browser.
+
+### Current Baseline Notes
+
+The environment is patterned after `hud-evals/hud-browser`: `env.py` starts a BrowserOS/Chromium
+desktop and publishes the same browser through both CDP (`browser`) and RFB/VNC (`screen`). BrowserOS
+is used because it exposes a real browser over CDP while also rendering into the VNC desktop HUD can
+record.
+
+The `claude` HUD baseline currently drives the RFB/computer-use path. That validates the deployed
+browser environment, but it is not the harness we should optimize for open-source RL. In smoke tests
+it spent many steps interacting with retail UI and did not reliably emit the final JSON packet. For
+training, prefer a CDP/structured-action harness that gives the policy compact observations and
+discrete browser actions instead of raw screenshots and free-form desktop typing.
+
+Known smoke jobs:
+
+- `https://hud.ai/jobs/1b452324782d42bc9a7097665e87fa75` - v1 deploy, completed, reward `0.0`, no JSON packet.
+- `https://hud.ai/jobs/da1bd00a3414409b8193fbcde2d1466f` - v2 deploy, long RFB rollout, failed grading after connection loss.
 
 ## Reward
 
