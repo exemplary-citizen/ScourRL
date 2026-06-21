@@ -2,18 +2,22 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import contextlib
+import json
 import logging
 import os
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+import mcp.types as mcp_types
 from hud.agents.base import Agent
-from hud.agents.types import AgentStep
+from hud.agents.types import AgentStep, ToolStep
 from hud.eval.runtime import HUDRuntime
+from hud.eval.runtime import Runtime as TCPRuntime
 from hud.eval.taskset import Taskset
-from hud.types import Step
+from hud.types import MCPToolCall, MCPToolResult, Step
 
 
 LOGGER = logging.getLogger("cart_scout.browser_use")
@@ -27,6 +31,11 @@ class BrowserUseCDPAgent(Agent):
     max_steps: int
     api_key: str | None = None
     base_url: str | None = None
+    use_thinking: bool = True
+    flash_mode: bool = False
+    trace_screenshots: bool = True
+    generate_gif: bool = False
+    rfb_watch_interval: float = 0.0
 
     async def __call__(self, run):
         from browser_use import Agent as BrowserUseAgent
@@ -42,16 +51,46 @@ class BrowserUseCDPAgent(Agent):
             base_url=self.base_url,
         )
         browser: Any = Browser(cdp_url=cdp_url)
-        agent = BrowserUseAgent(task=run.prompt_text, llm=llm, browser=browser)
+        recorded_history_items = 0
+
+        async def on_step_end(sdk_agent: Any) -> None:
+            nonlocal recorded_history_items
+            history_items = getattr(getattr(sdk_agent, "history", None), "history", [])
+            for index, item in enumerate(history_items[recorded_history_items:], start=recorded_history_items + 1):
+                _record_browser_use_history_item(
+                    run,
+                    history_item=item,
+                    step=index,
+                    include_screenshot=self.trace_screenshots,
+                )
+            recorded_history_items = len(history_items)
+
+        stop_watch = asyncio.Event()
+        watch_task: asyncio.Task[None] | None = None
+        if self.rfb_watch_interval > 0:
+            watch_task = asyncio.create_task(_record_rfb_watch(run, stop_watch, self.rfb_watch_interval))
+
+        agent = BrowserUseAgent(
+            task=run.prompt_text,
+            llm=llm,
+            browser=browser,
+            use_thinking=self.use_thinking,
+            flash_mode=self.flash_mode,
+            generate_gif=self.generate_gif,
+        )
 
         try:
-            history: Any = await agent.run(max_steps=self.max_steps)
+            history: Any = await agent.run(max_steps=self.max_steps, on_step_end=on_step_end)
         except Exception as exc:
             LOGGER.exception("browser-use run failed")
             run.trace.status = "error"
             run.record(Step(source="system", error=str(exc)))
             return
         finally:
+            stop_watch.set()
+            if watch_task is not None:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(watch_task, timeout=5.0)
             with contextlib.suppress(Exception):
                 await browser.stop()
 
@@ -76,6 +115,115 @@ class BrowserUseCDPAgent(Agent):
                 error=content if successful is False else None,
             )
         )
+
+
+async def _record_rfb_watch(run: Any, stop: asyncio.Event, interval_s: float) -> None:
+    try:
+        rfb = await run.client.open("rfb/3.8")
+    except Exception as exc:
+        LOGGER.warning("could not open RFB watch stream: %s", exc)
+        return
+    tick = 0
+    try:
+        while not stop.is_set():
+            try:
+                png = await rfb.screenshot_png()
+                image_b64 = base64.b64encode(png).decode("ascii")
+                call = MCPToolCall(name="browser_snapshot", arguments={"tick": tick})
+                result = MCPToolResult(
+                    call_id=call.id,
+                    content=[
+                        mcp_types.TextContent(type="text", text=f"browser snapshot {tick}"),
+                        mcp_types.ImageContent(type="image", mimeType="image/png", data=image_b64),
+                    ],
+                    isError=False,
+                )
+                run.record(ToolStep(call=call, result=result))
+            except Exception as exc:
+                LOGGER.warning("RFB watch snapshot failed: %s", exc)
+            tick += 1
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(stop.wait(), timeout=interval_s)
+    finally:
+        with contextlib.suppress(Exception):
+            await rfb.close()
+
+
+def _record_browser_use_history_item(
+    run: Any,
+    *,
+    history_item: Any,
+    step: int,
+    include_screenshot: bool,
+) -> None:
+    output = getattr(history_item, "model_output", None)
+    state = getattr(history_item, "state", None)
+    if output is None or state is None:
+        return
+    actions = [
+        action.model_dump(exclude_none=True, mode="json") if hasattr(action, "model_dump") else action
+        for action in getattr(output, "action", [])
+    ]
+    results = [
+        result.model_dump(exclude_none=True, mode="json") if hasattr(result, "model_dump") else result
+        for result in getattr(history_item, "result", [])
+    ]
+    screenshot = state.get_screenshot() if hasattr(state, "get_screenshot") else None
+    decision = {
+        "harness": "browser-use-cdp",
+        "step": step,
+        "url": getattr(state, "url", None),
+        "title": getattr(state, "title", None),
+        "evaluation_previous_goal": getattr(output, "evaluation_previous_goal", None),
+        "memory": getattr(output, "memory", None),
+        "next_goal": getattr(output, "next_goal", None),
+        "actions": actions,
+        "results": results,
+    }
+    tool_calls = [
+        MCPToolCall(name=f"browser_use.{_action_name(action)}", arguments=action)
+        for action in actions
+    ]
+    run.record(
+        AgentStep(
+            content=json.dumps(decision, indent=2, ensure_ascii=True),
+            tool_calls=tool_calls,
+            done=False,
+        )
+    )
+    for index, call in enumerate(tool_calls):
+        result_payload = results[index] if index < len(results) else {}
+        is_error = bool(isinstance(result_payload, dict) and result_payload.get("error"))
+        content: list[mcp_types.ContentBlock] = [
+            mcp_types.TextContent(
+                type="text",
+                text=json.dumps(
+                    {
+                        "step": step,
+                        "action": actions[index] if index < len(actions) else None,
+                        "result": result_payload,
+                        "url": getattr(state, "url", None),
+                        "title": getattr(state, "title", None),
+                    },
+                    indent=2,
+                    ensure_ascii=True,
+                ),
+            )
+        ]
+        if include_screenshot and isinstance(screenshot, str) and screenshot:
+            content.append(mcp_types.ImageContent(type="image", mimeType="image/png", data=screenshot))
+        run.record(
+            ToolStep(
+                call=call,
+                result=MCPToolResult(call_id=call.id, content=content, isError=is_error),
+            )
+        )
+
+
+def _action_name(action: Any) -> str:
+    if isinstance(action, dict) and action:
+        return str(next(iter(action.keys()))).replace(".", "_")
+    return "action"
 
 
 def _build_llm(provider: str, model: str, api_key: str | None, base_url: str | None):
@@ -124,6 +272,18 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-steps", type=int, default=35)
     parser.add_argument("--runtime-timeout", type=float, default=1800.0)
     parser.add_argument("--rollout-timeout", type=float, default=1800.0)
+    parser.add_argument("--no-thinking", action="store_true", help="Disable Browser Use's thinking field in model outputs.")
+    parser.add_argument("--flash-mode", action="store_true", help="Use Browser Use's smaller memory/action output schema.")
+    parser.add_argument("--no-trace-screenshots", action="store_true", help="Do not attach screenshots to HUD trace steps.")
+    parser.add_argument("--generate-gif", action="store_true", help="Ask Browser Use to write a local GIF replay artifact.")
+    parser.add_argument(
+        "--rfb-watch-interval",
+        type=float,
+        default=0.0,
+        help="Also record RFB desktop screenshots every N seconds for debugging. Disabled by default.",
+    )
+    parser.add_argument("--runtime", choices=["hud", "tcp"], default="hud")
+    parser.add_argument("--runtime-url", default="tcp://127.0.0.1:8765")
     return parser.parse_args()
 
 
@@ -142,10 +302,20 @@ async def main() -> None:
         max_steps=args.max_steps,
         api_key=api_key,
         base_url=args.base_url,
+        use_thinking=not args.no_thinking,
+        flash_mode=args.flash_mode,
+        trace_screenshots=not args.no_trace_screenshots,
+        generate_gif=args.generate_gif,
+        rfb_watch_interval=args.rfb_watch_interval,
+    )
+    runtime = (
+        HUDRuntime(run_timeout=args.runtime_timeout)
+        if args.runtime == "hud"
+        else TCPRuntime(args.runtime_url)
     )
     job = await taskset.run(
         agent,
-        runtime=HUDRuntime(run_timeout=args.runtime_timeout),
+        runtime=runtime,
         max_concurrent=1,
         rollout_timeout=args.rollout_timeout,
     )

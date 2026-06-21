@@ -142,6 +142,49 @@ Known smoke jobs:
 - `https://hud.ai/jobs/1b452324782d42bc9a7097665e87fa75` - v1 deploy, completed, reward `0.0`, no JSON packet.
 - `https://hud.ai/jobs/da1bd00a3414409b8193fbcde2d1466f` - v2 deploy, long RFB rollout, failed grading after connection loss.
 
+## Structured CDP Harness
+
+The preferred experimental harness is a fixed JSON action loop over CDP:
+
+```bash
+set -a; source .env; set +a
+uv run python scripts/run_structured_cdp_eval.py \
+  --model deepseek-ai/DeepSeek-V3.1 \
+  --api-key-env HUD_API_KEY \
+  --base-url https://inference.beta.hud.ai \
+  --task-id usb-c-charger-30w-under-40 \
+  --max-steps 8
+```
+
+This runner gives the model a small action API instead of Browser Use's larger internal schema:
+
+- `open_url`
+- `search_retailer`
+- `click_ref`
+- `fill_ref`
+- `press`
+- `scroll`
+- `go_back`
+- `extract_page`
+- `find_text`
+- `screenshot`
+- `emit_packet`
+- `stop`
+
+The parser strips common model noise such as `<think>` blocks, Markdown fences, and prose before the
+JSON action. The harness still records each model decision and browser action into HUD trace events,
+with screenshots attached to tool calls by default.
+
+Known structured CDP smoke jobs:
+
+- `https://hud.ai/jobs/fa38c6b655294b10aa60cb0c0ccd889c` - DeepSeek structured CDP run, completed in
+  4 steps, reward `0.975`.
+- `https://hud.ai/jobs/585510d2b9d842dfa53e9f606e43bede` - Qwen 3.6 structured CDP run, reached clean
+  structured steps but failed after repeated HUD inference `500` responses.
+
+For local iteration, use the same `--runtime tcp` and `--runtime-url tcp://127.0.0.1:8765` flags shown
+below in the local Browser Use example.
+
 ## Browser Use / CDP Harness
 
 For a better browser-agent baseline, use Browser Use over the environment's CDP capability instead
@@ -157,6 +200,44 @@ uv run python scripts/run_browser_use_eval.py \
   --max-steps 35
 ```
 
+This harness records Browser Use actions, URLs, and screenshots into HUD trace steps. It will not
+look exactly like the native RFB/computer-use replay because Browser Use drives Chrome over CDP, not
+desktop mouse/keyboard screenshots. Use the native `hud eval ... claude` path when the goal is to
+watch a human-like desktop replay; use this CDP path when the goal is a trainable browser-native
+action loop.
+
+For debugging, add an RFB watch stream. The agent still acts through CDP, but HUD also receives
+periodic desktop screenshots from the same browser:
+
+```bash
+set -a; source .env; set +a
+uv run python scripts/run_browser_use_eval.py \
+  --provider openai-like \
+  --model Qwen/Qwen3-30B-A3B \
+  --api-key-env HUD_API_KEY \
+  --base-url https://inference.beta.hud.ai \
+  --task-id usb-c-charger-30w-under-40 \
+  --max-steps 18 \
+  --no-thinking \
+  --flash-mode \
+  --rfb-watch-interval 3
+```
+
+HUD Gateway example with a trainable OpenAI-compatible model:
+
+```bash
+set -a; source .env; set +a
+uv run python scripts/run_browser_use_eval.py \
+  --provider openai-like \
+  --model Qwen/Qwen3-30B-A3B \
+  --api-key-env HUD_API_KEY \
+  --base-url https://inference.beta.hud.ai \
+  --task-id usb-c-charger-30w-under-40 \
+  --max-steps 18 \
+  --no-thinking \
+  --flash-mode
+```
+
 Provider options:
 
 - `anthropic` - Browser Use + Claude; requires `ANTHROPIC_API_KEY`.
@@ -169,7 +250,9 @@ export OPENAI_LIKE_API_KEY=dummy
 uv run python scripts/run_browser_use_eval.py \
   --provider openai-like \
   --model cart-scout-policy \
-  --task-id usb-c-charger-30w-under-40
+  --task-id usb-c-charger-30w-under-40 \
+  --no-thinking \
+  --flash-mode
 ```
 
 - `ollama` - Browser Use + local Ollama:
@@ -182,10 +265,56 @@ uv run python scripts/run_browser_use_eval.py \
 ```
 
 Recommendation for RL: keep HUD as the environment/reward system, but do not train against raw RFB
-desktop actions. Train a policy over a compact CDP/DOM action space such as `search`, `open_url`,
-`click_ref`, `extract_page`, `find_text`, `emit_packet`, and `stop`. Browser Use is a good interim
-baseline and data-collection harness; the trainable policy should eventually use the same structured
-observations/actions directly so rewards map cleanly to model behavior.
+desktop actions. Prefer the structured CDP harness above for trainable browser-native trajectories.
+Browser Use remains useful as a baseline and comparison runner.
+
+## Local Iteration
+
+Hosted HUD jobs are the right final check, but they are slow for harness debugging. For faster
+iteration, run the environment locally in Docker and watch the desktop through noVNC:
+
+```bash
+./scripts/run_local_env.sh
+open http://127.0.0.1:8080/vnc.html
+```
+
+Then point the CDP harness at the local control channel:
+
+```bash
+set -a; source .env; set +a
+uv run python scripts/run_structured_cdp_eval.py \
+  --runtime tcp \
+  --runtime-url tcp://127.0.0.1:8765 \
+  --model deepseek-ai/DeepSeek-V3.1 \
+  --api-key-env HUD_API_KEY \
+  --base-url https://inference.beta.hud.ai \
+  --task-id usb-c-charger-30w-under-40 \
+  --max-steps 6
+```
+
+For Browser Use comparison runs:
+
+```bash
+set -a; source .env; set +a
+uv run python scripts/run_browser_use_eval.py \
+  --runtime tcp \
+  --runtime-url tcp://127.0.0.1:8765 \
+  --provider openai-like \
+  --model Qwen/Qwen3-30B-A3B \
+  --api-key-env HUD_API_KEY \
+  --base-url https://inference.beta.hud.ai \
+  --task-id usb-c-charger-30w-under-40 \
+  --max-steps 6 \
+  --no-thinking \
+  --flash-mode \
+  --rfb-watch-interval 3
+```
+
+Use this loop for prompt/tool/observability changes. Use hosted `--runtime hud` after a local run
+looks good and you want the platform job artifact.
+
+See [docs/observability.md](docs/observability.md) for the full debugging workflow and known smoke
+jobs.
 
 ## Reward
 
