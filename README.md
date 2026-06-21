@@ -368,3 +368,58 @@ Recommended first dataset shape:
 ```
 
 The browser RFT stretch path is `fireworks_rft/remote_server.py`.
+
+## Episode Dataset and RL Pipeline
+
+The repo can now create a small grouped rollout dataset for RL-style improvement experiments. The
+default plan is 300 episodes: 100 diverse shopping task groups with 3 rollouts per task. The model
+default matches the Browser Use harness: `anthropic` with `claude-sonnet-4-5`.
+
+Create the episode plan and generated HUD taskset without any API keys:
+
+```bash
+uv run python scripts/generate_episodes.py plan \
+  --episodes 300 \
+  --rollouts-per-task 3 \
+  --output data/episodes/cart_scout_300_plan.jsonl \
+  --taskset data/episodes/generated_tasks.py
+```
+
+After setting `HUD_API_KEY` and the model key, collect Browser Use CDP rollouts:
+
+```bash
+export HUD_API_KEY=...
+export ANTHROPIC_API_KEY=...
+uv run python scripts/generate_episodes.py collect \
+  --plan data/episodes/cart_scout_300_plan.jsonl \
+  --output data/episodes/cart_scout_300_records.jsonl \
+  --max-concurrent 1
+```
+
+For a smoke run before spending on all 300 episodes, add `--limit 3` or `--limit 12` to the collect
+command.
+
+The generated taskset is also reusable for standard HUD eval workflows:
+
+```bash
+uv run hud eval data/episodes/generated_tasks.py claude --runtime hud --full --group 3 --max-steps 80 -y
+```
+
+Prepare training artifacts from completed records:
+
+```bash
+uv run python scripts/train_rl.py prepare \
+  --records data/episodes/cart_scout_300_records.jsonl \
+  --output-dir data/training/cart_scout_small_rl
+```
+
+This exports:
+
+- `sft_train.jsonl` - high-reward assistant packets for warm-start fine-tuning.
+- `sft_eval.jsonl` - held-out high-reward eval rows.
+- `preference_pairs.jsonl` - best-vs-worst grouped rollouts for DPO/IPO or GRPO-style policy updates.
+- `reward_model_rows.jsonl` - prompt/completion/reward rows with deterministic reward breakdowns.
+- `manifest.json` - counts, thresholds, reward summary, and artifact paths.
+
+The pipeline is deliberately split into planning, collection, scoring, and training-prep stages so the
+same generated tasks can be reused for later evals and model comparisons.
