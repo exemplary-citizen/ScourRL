@@ -31,6 +31,7 @@ from cart_scout.structured_cdp import (
 
 LOGGER = logging.getLogger("cart_scout.structured_cdp")
 CDP_PROTOCOL = "cdp/1.3"
+INTERACTIVE_SELECTOR = "a, button, input, textarea, select, [role='button'], [contenteditable='true']"
 
 
 @dataclass
@@ -221,23 +222,38 @@ async def _observe_page(page: Any) -> dict[str, Any]:
         await page.wait_for_load_state("domcontentloaded", timeout=3000)
     refs = await page.evaluate(
         """
-        () => Array.from(document.querySelectorAll('a, button, [role="button"]'))
+        (selector) => Array.from(document.querySelectorAll(selector))
           .map((el, selectorIndex) => ({
             selector_index: selectorIndex,
             tag: el.tagName.toLowerCase(),
-            text: (el.innerText || el.textContent || el.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim().slice(0, 180),
+            type: el.getAttribute('type') || null,
+            text: (el.innerText || el.textContent || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('name') || el.value || '').replace(/\\s+/g, ' ').trim().slice(0, 180),
             href: el.href || null,
             visible: !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
           }))
           .filter(item => item.visible && (item.text || item.href))
           .slice(0, 40)
           .map((item, ref) => ({...item, ref}))
+        """,
+        INTERACTIVE_SELECTOR,
+    )
+    scroll = await page.evaluate(
+        """
+        () => ({
+          x: window.scrollX,
+          y: window.scrollY,
+          viewport_width: window.innerWidth,
+          viewport_height: window.innerHeight,
+          page_width: document.documentElement.scrollWidth,
+          page_height: document.documentElement.scrollHeight
+        })
         """
     )
     text = await page.evaluate("() => document.body ? document.body.innerText : ''")
     return {
         "url": page.url,
         "title": await page.title(),
+        "scroll": scroll,
         "text": compact_text(text, limit=2500),
         "refs": refs,
     }
@@ -247,8 +263,8 @@ async def _execute_action(page: Any, action: StructuredAction, observation: dict
     match action.action:
         case "open_url":
             url = str(action.args.get("url", ""))
-            if not _safe_retail_url(url):
-                return {"ok": False, "error": f"blocked URL outside allowed retailers: {url}"}
+            if not _safe_url(url):
+                return {"ok": False, "error": f"blocked unsafe URL: {url}"}
             await page.goto(url, wait_until="domcontentloaded", timeout=20000)
             return {"ok": True, "url": page.url}
         case "search_retailer":
@@ -265,11 +281,42 @@ async def _execute_action(page: Any, action: StructuredAction, observation: dict
             text = str(item.get("text", ""))
             if _blocked_click(text, str(href or "")):
                 return {"ok": False, "error": f"blocked unsafe click target: {text or href}"}
-            if href and _safe_retail_url(str(href)):
+            if href and _safe_url(str(href)):
                 await page.goto(href, wait_until="domcontentloaded", timeout=20000)
             else:
-                await page.locator("a, button, [role='button']").nth(int(item["selector_index"])).click(timeout=8000)
+                await page.locator(INTERACTIVE_SELECTOR).nth(int(item["selector_index"])).click(timeout=8000)
             return {"ok": True, "clicked": item, "url": page.url}
+        case "fill_ref":
+            ref = int(action.args.get("ref"))
+            refs = observation.get("refs", [])
+            if ref < 0 or ref >= len(refs):
+                return {"ok": False, "error": f"ref out of range: {ref}"}
+            text = str(action.args.get("text", ""))
+            item = refs[ref]
+            if _blocked_click(str(item.get("text", "")), str(item.get("href") or "")):
+                return {"ok": False, "error": f"blocked unsafe fill target: {item.get('text') or item.get('href')}"}
+            locator = page.locator(INTERACTIVE_SELECTOR).nth(int(item["selector_index"]))
+            await locator.fill(text, timeout=8000)
+            return {"ok": True, "filled": item, "text_length": len(text), "url": page.url}
+        case "press":
+            key = str(action.args.get("key", "Enter"))
+            await page.keyboard.press(key)
+            with contextlib.suppress(Exception):
+                await page.wait_for_load_state("domcontentloaded", timeout=5000)
+            return {"ok": True, "key": key, "url": page.url}
+        case "scroll":
+            direction = str(action.args.get("direction", "down")).lower()
+            amount = int(action.args.get("amount", 700))
+            delta = -abs(amount) if direction == "up" else abs(amount)
+            await page.mouse.wheel(0, delta)
+            await page.wait_for_timeout(500)
+            scroll = await page.evaluate(
+                "() => ({x: window.scrollX, y: window.scrollY, page_height: document.documentElement.scrollHeight, viewport_height: window.innerHeight})"
+            )
+            return {"ok": True, "direction": direction, "amount": amount, "scroll": scroll, "url": page.url}
+        case "go_back":
+            response = await page.go_back(wait_until="domcontentloaded", timeout=10000)
+            return {"ok": True, "url": page.url, "status": response.status if response else None}
         case "extract_page":
             return {"ok": True, "url": page.url, "title": await page.title(), "text": compact_text(await page.locator("body").inner_text(timeout=5000), 3000)}
         case "find_text":
@@ -277,6 +324,8 @@ async def _execute_action(page: Any, action: StructuredAction, observation: dict
             haystack = observation.get("text", "")
             index = haystack.lower().find(pattern.lower())
             return {"ok": True, "pattern": pattern, "found": index >= 0, "index": index}
+        case "screenshot":
+            return {"ok": True, "url": page.url, "screenshot_attached": True}
         case "emit_packet":
             return {"ok": True, "emitted": True}
         case "stop":
@@ -320,8 +369,8 @@ def _compact_result(result: dict[str, Any]) -> dict[str, Any]:
     return compacted
 
 
-def _safe_retail_url(url: str) -> bool:
-    if not url.startswith(("https://www.target.com", "https://target.com", "https://www.amazon.com", "https://amazon.com")):
+def _safe_url(url: str) -> bool:
+    if not url.startswith("https://"):
         return False
     return not _blocked_click("", url)
 
@@ -347,6 +396,7 @@ def _observation_summary(observation: dict[str, Any]) -> dict[str, Any]:
     return {
         "url": observation.get("url"),
         "title": observation.get("title"),
+        "scroll": observation.get("scroll"),
         "text": compact_text(str(observation.get("text", "")), 800),
         "refs": observation.get("refs", [])[:20],
     }

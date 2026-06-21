@@ -46,6 +46,20 @@ def test_parse_structured_action_reports_invalid_action():
     assert parsed.error
 
 
+def test_parse_structured_browser_primitives():
+    for raw, expected in [
+        ('{"action": "scroll", "args": {"direction": "down", "amount": 900}}', "scroll"),
+        ('{"action": "fill_ref", "args": {"ref": 3, "text": "usb c charger"}}', "fill_ref"),
+        ('{"action": "press", "args": {"key": "Enter"}}', "press"),
+        ('{"action": "go_back", "args": {}}', "go_back"),
+        ('{"action": "screenshot", "args": {}}', "screenshot"),
+    ]:
+        parsed = parse_structured_action(raw)
+        assert parsed.error is None
+        assert parsed.action is not None
+        assert parsed.action.action == expected
+
+
 def test_extract_first_json_object_handles_nested_strings():
     text = 'prefix {"action":"find_text","args":{"pattern":"USB-C {PD}"}} suffix'
 

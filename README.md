@@ -161,8 +161,13 @@ This runner gives the model a small action API instead of Browser Use's larger i
 - `open_url`
 - `search_retailer`
 - `click_ref`
+- `fill_ref`
+- `press`
+- `scroll`
+- `go_back`
 - `extract_page`
 - `find_text`
+- `screenshot`
 - `emit_packet`
 - `stop`
 

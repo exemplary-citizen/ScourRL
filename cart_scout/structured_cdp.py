@@ -13,8 +13,13 @@ ActionName = Literal[
     "open_url",
     "search_retailer",
     "click_ref",
+    "fill_ref",
+    "press",
+    "scroll",
+    "go_back",
     "extract_page",
     "find_text",
+    "screenshot",
     "emit_packet",
     "stop",
 ]
@@ -121,12 +126,17 @@ Available actions:
 - {{"action":"open_url","args":{{"url":"https://..."}}}}
 - {{"action":"search_retailer","args":{{"retailer":"target|amazon","query":"search query"}}}}
 - {{"action":"click_ref","args":{{"ref":0}}}}
+- {{"action":"fill_ref","args":{{"ref":0,"text":"value to type"}}}}
+- {{"action":"press","args":{{"key":"Enter"}}}}
+- {{"action":"scroll","args":{{"direction":"down|up","amount":700}}}}
+- {{"action":"go_back","args":{{}}}}
 - {{"action":"extract_page","args":{{}}}}
 - {{"action":"find_text","args":{{"pattern":"text to find"}}}}
+- {{"action":"screenshot","args":{{}}}}
 - {{"action":"emit_packet","args":{{"packet":{{...required task JSON...}}}}}}
 - {{"action":"stop","args":{{"reason":"why stopping without packet"}}}}
 
-Use search_retailer instead of general web search. Click product links only. Never sign in, check out, or enter payment details.
+Use search_retailer for Target/Amazon shopping searches. Use scroll when useful items may be below the fold. Never sign in, check out, or enter payment details.
 When you have one plausible product with price and evidence, call emit_packet with the exact task JSON object.
 
 Task prompt:

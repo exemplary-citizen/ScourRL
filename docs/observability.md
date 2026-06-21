@@ -55,6 +55,10 @@ Expected trace shape:
 - `tool_call` rows named `structured_cdp.*` contain action results and screenshots.
 - The final answer is emitted only through `emit_packet`, so the task grader sees the required packet JSON.
 
+The structured action set covers basic browser navigation and interaction: open URL, retailer search,
+click observed refs, fill observed inputs, press keys, scroll, go back, extract page text, find text,
+capture a screenshot, emit the final packet, and stop.
+
 Known structured CDP smoke job:
 
 - `https://hud.ai/jobs/fa38c6b655294b10aa60cb0c0ccd889c` - DeepSeek structured CDP run, reward `0.975`.
