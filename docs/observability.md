@@ -51,8 +51,8 @@ uv run python scripts/run_structured_cdp_eval.py \
 
 Expected trace shape:
 
-- `agent_message` rows contain the observation summary, raw model output, parsed action, and parse error if any.
-- `tool_call` rows named `structured_cdp.*` contain action results and screenshots.
+- `agent_message` rows contain the observation summary, progress state, raw model output, parsed action, and parse error if any.
+- `tool_call` rows named `structured_cdp.*` contain action results, progress deltas, dense shaping rewards, and screenshots.
 - The final answer is emitted only through `emit_packet`, so the task grader sees the required packet JSON.
 
 The structured action set covers basic browser navigation and interaction: open URL, retailer search,
@@ -62,6 +62,8 @@ capture a screenshot, emit the final packet, and stop.
 Known structured CDP smoke job:
 
 - `https://hud.ai/jobs/fa38c6b655294b10aa60cb0c0ccd889c` - DeepSeek structured CDP run, reward `0.975`.
+- `https://hud.ai/jobs/9cc1972751a14cb4b97cb93191b95def` - DeepSeek structured CDP run with progress
+  telemetry, reward `1.0`.
 
 ### 3. Browser Use CDP With RFB Watch
 
