@@ -113,7 +113,36 @@ def test_observation_progress_rewards_information_not_actions():
     assert richer.score > empty.score
     assert richer.price_found
     assert richer.must_have_hits == ("USB-C", "Power Delivery", "30W")
+    assert richer.evidence_source == "product"
     assert richer.evidence_like
+
+
+def test_observation_progress_does_not_count_query_terms_as_evidence():
+    task = ShoppingTaskSpec(
+        task_id="usb",
+        instruction="Find a USB-C charger under $40.",
+        allowed_domains=["target.com", "amazon.com"],
+        max_price=40,
+        must_have=["USB-C", "Power Delivery", "30W"],
+        must_not_have=["Lightning"],
+    )
+
+    search_only = observation_progress(
+        {
+            "url": "https://www.target.com/s?searchTerm=USB-C+charger+30W+Power+Delivery",
+            "title": "Target search",
+            "text": "Search results",
+            "refs": [],
+        },
+        task,
+        visited_urls=1,
+    )
+
+    assert search_only.evidence_source == "search"
+    assert search_only.must_have_hits == ()
+    assert not search_only.price_found
+    assert not search_only.evidence_like
+    assert search_only.score < 0.3
 
 
 def test_shaping_reward_penalizes_unsafe_and_repeated_actions():

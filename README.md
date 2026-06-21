@@ -345,10 +345,14 @@ terminal HUD reward, but each `structured_cdp.*` tool result includes:
 - allowed-domain state
 - price found
 - must-have terms visible in the observation
+- evidence source (`search`, `product`, or generic page)
 - evidence-like signal
 - unsafe attempt count
 - repeated-action and no-op counts
 - dense shaping reward for offline training/debugging
+
+Progress scoring treats product pages as stronger evidence than search pages, and it does not count
+terms that appear only in the URL/query string as product evidence.
 
 Known shaping smoke job:
 
