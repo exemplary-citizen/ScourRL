@@ -53,6 +53,7 @@ class ProgressState:
     allowed_domain: bool
     price_found: bool
     must_have_hits: tuple[str, ...]
+    evidence_source: str
     evidence_like: bool
     unsafe_attempts: int
     repeated_actions: int
@@ -151,20 +152,28 @@ def observation_progress(
     This is not the terminal reward. It is a debugging/training signal for whether
     browser actions are improving the agent's state.
     """
-    text = _observation_text(observation)
     url = str(observation.get("url") or "")
+    page_text = _page_evidence_text(observation)
+    refs_text = _refs_text(observation)
+    evidence_text = " ".join([page_text, refs_text]).lower()
+    source = _evidence_source(url)
     allowed_domain = _domain_allowed(url, task.allowed_domains)
-    price_found = parse_price(text) is not None
-    must_have_hits = tuple(term for term in task.must_have if _term_hit(term, text))
-    evidence_like = bool(price_found and (must_have_hits or _product_like_text(text)))
+    price_found = parse_price(evidence_text) is not None
+    must_have_hits = tuple(term for term in task.must_have if _term_hit(term, evidence_text))
+    evidence_like = bool(
+        price_found
+        and (must_have_hits or _product_like_text(evidence_text))
+        and source != "query"
+    )
 
     score = 0.0
     if allowed_domain:
         score += 0.15
-    if price_found:
+    if price_found and source != "query":
         score += 0.20
     if task.must_have:
-        score += 0.35 * len(must_have_hits) / len(task.must_have)
+        source_weight = 1.0 if source == "product" else 0.55
+        score += 0.35 * len(must_have_hits) / len(task.must_have) * source_weight
     else:
         score += 0.35
     if evidence_like:
@@ -180,6 +189,7 @@ def observation_progress(
         allowed_domain=allowed_domain,
         price_found=price_found,
         must_have_hits=must_have_hits,
+        evidence_source=source,
         evidence_like=evidence_like,
         unsafe_attempts=unsafe_attempts,
         repeated_actions=repeated_actions,
@@ -231,16 +241,27 @@ def compact_text(text: str, limit: int = 6000) -> str:
     return normalized[:limit].rsplit(" ", 1)[0] + " ..."
 
 
-def _observation_text(observation: dict[str, Any]) -> str:
-    refs = " ".join(str(ref.get("text", "")) for ref in observation.get("refs", []) if isinstance(ref, dict))
+def _page_evidence_text(observation: dict[str, Any]) -> str:
     return " ".join(
         [
-            str(observation.get("url") or ""),
             str(observation.get("title") or ""),
             str(observation.get("text") or ""),
-            refs,
         ]
     ).lower()
+
+
+def _refs_text(observation: dict[str, Any]) -> str:
+    return " ".join(str(ref.get("text", "")) for ref in observation.get("refs", []) if isinstance(ref, dict)).lower()
+
+
+def _evidence_source(url: str) -> str:
+    path = (urlparse(url).path or "").lower()
+    query = (urlparse(url).query or "").lower()
+    if "/p/" in path or "/dp/" in path or "/gp/product/" in path:
+        return "product"
+    if "search" in path or "searchterm=" in query or "k=" in query:
+        return "search"
+    return "page"
 
 
 def _domain_allowed(url: str, allowed_domains: list[str]) -> bool:

@@ -342,6 +342,7 @@ def _progress_payload(progress: Any) -> dict[str, Any]:
         "allowed_domain": progress.allowed_domain,
         "price_found": progress.price_found,
         "must_have_hits": list(progress.must_have_hits),
+        "evidence_source": progress.evidence_source,
         "evidence_like": progress.evidence_like,
         "unsafe_attempts": progress.unsafe_attempts,
         "repeated_actions": progress.repeated_actions,

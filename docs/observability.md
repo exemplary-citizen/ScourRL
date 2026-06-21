@@ -59,6 +59,10 @@ The structured action set covers basic browser navigation and interaction: open 
 click observed refs, fill observed inputs, press keys, scroll, go back, extract page text, find text,
 capture a screenshot, emit the final packet, and stop.
 
+Progress telemetry separates `search` and `product` evidence sources. URL/query text does not count
+as product evidence; search-result observations can provide discounted progress, and product pages
+provide stronger evidence credit.
+
 Known structured CDP smoke job:
 
 - `https://hud.ai/jobs/fa38c6b655294b10aa60cb0c0ccd889c` - DeepSeek structured CDP run, reward `0.975`.
