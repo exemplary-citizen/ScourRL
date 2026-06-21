@@ -163,6 +163,23 @@ desktop mouse/keyboard screenshots. Use the native `hud eval ... claude` path wh
 watch a human-like desktop replay; use this CDP path when the goal is a trainable browser-native
 action loop.
 
+For debugging, add an RFB watch stream. The agent still acts through CDP, but HUD also receives
+periodic desktop screenshots from the same browser:
+
+```bash
+set -a; source .env; set +a
+uv run python scripts/run_browser_use_eval.py \
+  --provider openai-like \
+  --model Qwen/Qwen3-30B-A3B \
+  --api-key-env HUD_API_KEY \
+  --base-url https://inference.beta.hud.ai \
+  --task-id usb-c-charger-30w-under-40 \
+  --max-steps 18 \
+  --no-thinking \
+  --flash-mode \
+  --rfb-watch-interval 3
+```
+
 HUD Gateway example with a trainable OpenAI-compatible model:
 
 ```bash
@@ -209,6 +226,40 @@ desktop actions. Train a policy over a compact CDP/DOM action space such as `sea
 `click_ref`, `extract_page`, `find_text`, `emit_packet`, and `stop`. Browser Use is a good interim
 baseline and data-collection harness; the trainable policy should eventually use the same structured
 observations/actions directly so rewards map cleanly to model behavior.
+
+## Local Iteration
+
+Hosted HUD jobs are the right final check, but they are slow for harness debugging. For faster
+iteration, run the environment locally in Docker and watch the desktop through noVNC:
+
+```bash
+./scripts/run_local_env.sh
+open http://127.0.0.1:8080/vnc.html
+```
+
+Then point the CDP harness at the local control channel:
+
+```bash
+set -a; source .env; set +a
+uv run python scripts/run_browser_use_eval.py \
+  --runtime tcp \
+  --runtime-url tcp://127.0.0.1:8765 \
+  --provider openai-like \
+  --model Qwen/Qwen3-30B-A3B \
+  --api-key-env HUD_API_KEY \
+  --base-url https://inference.beta.hud.ai \
+  --task-id usb-c-charger-30w-under-40 \
+  --max-steps 6 \
+  --no-thinking \
+  --flash-mode \
+  --rfb-watch-interval 3
+```
+
+Use this loop for prompt/tool/observability changes. Use hosted `--runtime hud` after a local run
+looks good and you want the platform job artifact.
+
+See [docs/observability.md](docs/observability.md) for the full debugging workflow and known smoke
+jobs.
 
 ## Reward
 
