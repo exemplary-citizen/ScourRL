@@ -36,7 +36,8 @@ The core output is a compact `PurchasePacket` JSON:
 - `cart_scout/schema.py` - `PurchasePacket`, evidence, snapshots, and task specs.
 - `cart_scout/reward.py` - deterministic reward and intermediate potential function.
 - `fireworks_rft/evaluator.py` - single-turn RFT evaluator for snippets -> packet training.
-- `data/` - starter task rows and example observation snapshots.
+- `scripts/generate_task_samples.py` - deterministic train/eval shopping task generator.
+- `data/` - starter task rows, generated train/eval task rows, and example observation snapshots.
 - `tests/` - offline reward/template tests that do not require Docker or Chromium.
 
 ## Safety Boundary
@@ -73,6 +74,27 @@ The offline tests still run locally.
 ```bash
 uv run --extra dev pytest -q
 ```
+
+## Task Data
+
+Starter task specs live in `data/shopping_tasks.jsonl`. Generated GRPO task splits live in:
+
+- `data/shopping_train_1000.jsonl` - 1,000 training tasks.
+- `data/shopping_eval_200.jsonl` - 200 evaluation tasks.
+
+Regenerate the splits deterministically:
+
+```bash
+uv run python scripts/generate_task_samples.py \
+  --train-count 1000 \
+  --eval-count 200 \
+  --train-out data/shopping_train_1000.jsonl \
+  --eval-out data/shopping_eval_200.jsonl
+```
+
+The generator validates every row as a `ShoppingTaskSpec` and fails if train/eval overlap by
+`task_id` or exact instruction. `token_budget` is the budget for the final `PurchasePacket` JSON,
+not the browser context length; the GRPO reward uses it as a compression signal.
 
 ## HUD Evaluation
 
@@ -274,6 +296,39 @@ Terminal reward is bounded to `[0, 1]`:
 - Evidence quotes and support text.
 - Compression within token budget.
 - Optional cart readiness.
+
+The HUD environment currently uses `score_purchase_packet(...)`, which keeps the original terminal
+reward shape and optional snapshot-backed evidence verification.
+
+For GRPO over final packet completions, use `score_grpo_packet(...)`. It keeps hard deterministic
+safety gates, then applies this dense packet reward:
+
+```text
+format              0.05
+domain              0.10
+price               0.15
+must_have           0.25
+must_not            0.15
+evidence_quality    0.20
+recommendation      0.05
+compression         0.05
+```
+
+Caps prevent common reward hacking: no allowed-domain URL, missing/over-budget price, missing
+must-have constraints, present forbidden traits, and missing/weak evidence all limit the final score.
+
+An optional Fireworks Qwen judge can refine the semantic components only:
+
+```python
+from cart_scout.reward import FireworksQwenJudge, score_grpo_packet
+
+judge = FireworksQwenJudge()  # reads FIREWORKS_API_KEY
+result = score_grpo_packet(answer, task, judge=judge)
+```
+
+The judge can adjust `must_have`, `evidence_quality`, and `recommendation`; it does not override
+hard safety gates, domain checks, price parsing, compression, or caps. If the judge call fails, the
+reward falls back to deterministic scoring and records the failure in `RewardResult.reasons`.
 
 Intermediate shaping can use:
 
