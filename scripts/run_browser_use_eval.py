@@ -31,6 +31,11 @@ class BrowserUseCDPAgent(Agent):
     max_steps: int
     api_key: str | None = None
     base_url: str | None = None
+    llm_temperature: float | None = None
+    llm_top_p: float | None = None
+    max_completion_tokens: int | None = None
+    reasoning_effort: str | None = None
+    use_vision: bool | str = True
     use_thinking: bool = True
     flash_mode: bool = False
     trace_screenshots: bool = True
@@ -49,6 +54,10 @@ class BrowserUseCDPAgent(Agent):
             model=self.model,
             api_key=self.api_key,
             base_url=self.base_url,
+            temperature=self.llm_temperature,
+            top_p=self.llm_top_p,
+            max_completion_tokens=self.max_completion_tokens,
+            reasoning_effort=self.reasoning_effort,
         )
         browser: Any = Browser(cdp_url=cdp_url)
         recorded_history_items = 0
@@ -74,6 +83,7 @@ class BrowserUseCDPAgent(Agent):
             task=run.prompt_text,
             llm=llm,
             browser=browser,
+            use_vision=self.use_vision,
             use_thinking=self.use_thinking,
             flash_mode=self.flash_mode,
             generate_gif=self.generate_gif,
@@ -226,7 +236,17 @@ def _action_name(action: Any) -> str:
     return "action"
 
 
-def _build_llm(provider: str, model: str, api_key: str | None, base_url: str | None):
+def _build_llm(
+    provider: str,
+    model: str,
+    api_key: str | None,
+    base_url: str | None,
+    *,
+    temperature: float | None = None,
+    top_p: float | None = None,
+    max_completion_tokens: int | None = None,
+    reasoning_effort: str | None = None,
+):
     match provider:
         case "anthropic":
             from browser_use import ChatAnthropic
@@ -239,10 +259,20 @@ def _build_llm(provider: str, model: str, api_key: str | None, base_url: str | N
         case "openai-like":
             from browser_use.llm.openai.like import ChatOpenAILike
 
+            kwargs: dict[str, Any] = {}
+            if temperature is not None:
+                kwargs["temperature"] = temperature
+            if top_p is not None:
+                kwargs["top_p"] = top_p
+            if max_completion_tokens is not None:
+                kwargs["max_completion_tokens"] = max_completion_tokens
+            if reasoning_effort is not None:
+                kwargs["reasoning_effort"] = reasoning_effort
             return ChatOpenAILike(
                 model=model,
                 api_key=api_key or os.getenv("OPENAI_LIKE_API_KEY") or os.getenv("OPENAI_API_KEY"),
                 base_url=base_url or os.getenv("OPENAI_LIKE_BASE_URL"),
+                **kwargs,
             )
         case "ollama":
             from browser_use.llm.ollama.chat import ChatOllama

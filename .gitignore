@@ -4,6 +4,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .hud_eval.toml
+.fireworks/
 *.pyc
 dist/
 build/

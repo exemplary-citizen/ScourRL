@@ -35,7 +35,8 @@ The core output is a compact `PurchasePacket` JSON:
 - `tasks.py` - safe shopping research tasks for grouped browser rollouts.
 - `cart_scout/schema.py` - `PurchasePacket`, evidence, snapshots, and task specs.
 - `cart_scout/reward.py` - deterministic reward and intermediate potential function.
-- `fireworks_rft/evaluator.py` - single-turn RFT evaluator for snippets -> packet training.
+- `fireworks_rft/remote_server.py` - Fireworks remote rollout endpoint for browser-agent RL.
+- `fireworks_rft/remote_evaluator.py` - Eval Protocol scorer wired to the remote rollout endpoint.
 - `scripts/generate_task_samples.py` - deterministic train/eval shopping task generator.
 - `data/` - starter task rows, generated train/eval task rows, and example observation snapshots.
 - `tests/` - offline reward/template tests that do not require Docker or Chromium.
@@ -77,7 +78,7 @@ uv run --extra dev pytest -q
 
 ## Task Data
 
-Starter task specs live in `data/shopping_tasks.jsonl`. Generated GRPO task splits live in:
+Starter task specs live in `data/shopping_tasks.jsonl`. Generated task splits live in:
 
 - `data/shopping_train_1000.jsonl` - 1,000 training tasks.
 - `data/shopping_eval_200.jsonl` - 200 evaluation tasks.
@@ -164,10 +165,53 @@ Known smoke jobs:
 - `https://hud.ai/jobs/1b452324782d42bc9a7097665e87fa75` - v1 deploy, completed, reward `0.0`, no JSON packet.
 - `https://hud.ai/jobs/da1bd00a3414409b8193fbcde2d1466f` - v2 deploy, long RFB rollout, failed grading after connection loss.
 
+## Structured CDP Harness
+
+For the trainable live-browser shopping agent, use the structured CDP harness. It attaches to HUD's
+real Chromium CDP capability, gives the policy compact page observations, and accepts a fixed JSON
+action space: `open_url`, `search_retailer`, `click_ref`, `fill_ref`, `press`, `scroll`, `go_back`,
+`extract_page`, `find_text`, `screenshot`, `emit_packet`, and `stop`.
+
+Hosted HUD:
+
+```bash
+set -a; source .env; set +a
+uv run python scripts/run_structured_cdp_eval.py \
+  --runtime hud \
+  --model deepseek-ai/DeepSeek-V3.1 \
+  --api-key-env HUD_API_KEY \
+  --base-url https://inference.beta.hud.ai \
+  --task-id usb-c-charger-30w-under-40 \
+  --max-steps 8 \
+  --no-trace-screenshots
+```
+
+Local HUD TCP substrate:
+
+```bash
+NOVNC_PORT=8082 ./scripts/run_local_env.sh
+set -a; source .env; set +a
+uv run python scripts/run_structured_cdp_eval.py \
+  --runtime tcp \
+  --runtime-url tcp://127.0.0.1:8765 \
+  --model deepseek-ai/DeepSeek-V3.1 \
+  --api-key-env HUD_API_KEY \
+  --base-url https://inference.beta.hud.ai \
+  --task-id usb-c-charger-30w-under-40 \
+  --max-steps 8 \
+  --no-trace-screenshots
+```
+
+Known smoke:
+
+- `https://hud.ai/jobs/c02c7ce530234394bb9260ffa4054e95` - local HUD TCP, structured CDP,
+  completed, reward `0.975`, emitted a final `PurchasePacket` after 8 steps.
+
 ## Browser Use / CDP Harness
 
-For a better browser-agent baseline, use Browser Use over the environment's CDP capability instead
-of the default `claude` RFB/computer-use path:
+Browser Use over CDP remains useful for comparison and data collection, but it is not the preferred
+policy loop for GRPO because its action schema is less fixed than the structured CDP controller.
+Use it when you want Browser Use's built-in agent behavior over the same HUD browser capability:
 
 ```bash
 uv sync --extra dev
@@ -244,10 +288,8 @@ uv run python scripts/run_browser_use_eval.py \
 ```
 
 Recommendation for RL: keep HUD as the environment/reward system, but do not train against raw RFB
-desktop actions. Train a policy over a compact CDP/DOM action space such as `search`, `open_url`,
-`click_ref`, `extract_page`, `find_text`, `emit_packet`, and `stop`. Browser Use is a good interim
-baseline and data-collection harness; the trainable policy should eventually use the same structured
-observations/actions directly so rewards map cleanly to model behavior.
+desktop actions. Train the policy over the structured CDP/DOM action space so rewards map cleanly
+to model behavior.
 
 ## Local Iteration
 
@@ -259,22 +301,19 @@ iteration, run the environment locally in Docker and watch the desktop through n
 open http://127.0.0.1:8080/vnc.html
 ```
 
-Then point the CDP harness at the local control channel:
+Then point the structured CDP harness at the local control channel:
 
 ```bash
 set -a; source .env; set +a
-uv run python scripts/run_browser_use_eval.py \
+uv run python scripts/run_structured_cdp_eval.py \
   --runtime tcp \
   --runtime-url tcp://127.0.0.1:8765 \
-  --provider openai-like \
-  --model Qwen/Qwen3-30B-A3B \
+  --model deepseek-ai/DeepSeek-V3.1 \
   --api-key-env HUD_API_KEY \
   --base-url https://inference.beta.hud.ai \
   --task-id usb-c-charger-30w-under-40 \
-  --max-steps 6 \
-  --no-thinking \
-  --flash-mode \
-  --rfb-watch-interval 3
+  --max-steps 8 \
+  --no-trace-screenshots
 ```
 
 Use this loop for prompt/tool/observability changes. Use hosted `--runtime hud` after a local run
@@ -338,33 +377,115 @@ r_t = progress_potential(packet_next, task) - progress_potential(packet_prev, ta
 
 This rewards new verified information, not clicks.
 
-## Fireworks RFT Path
+## Fireworks Remote GRPO Path
 
-Use `fireworks_rft/evaluator.py` for the simpler 24-hour path:
+The active Fireworks path is remote-rollout-first. The training dataset contains task-only
+`ShoppingTaskSpec` rows; Fireworks calls a remote service for each rollout, and that service is
+responsible for launching the shopping browser agent, letting it browse allowed live retailer pages,
+collecting the final `PurchasePacket`, and scoring it.
 
-```python
-from fireworks_rft.evaluator import score_packet
+The previous synthetic snippet datasets were removed because they cannot train the main shopping
+agent to browse. They were only useful for packet-format smoke testing.
 
-score, reason = score_packet(model_text, ground_truth)
+Local protocol smoke test:
+
+```bash
+uv sync --extra dev
+uv run --extra dev pytest -q tests/test_remote_server.py
 ```
 
-Recommended first dataset shape:
+Run the local remote server manually:
 
-```json
-{
-  "messages": [
-    {
-      "role": "user",
-      "content": "Task plus observed product snippets. Return PurchasePacket JSON only."
-    }
-  ],
-  "ground_truth": {
-    "max_price": 40,
-    "must_have": ["USB-C", "Power Delivery", "30W"],
-    "must_not_have": ["Lightning"],
-    "allowed_domains": ["target.com", "amazon.com"]
-  }
-}
+```bash
+uv run --extra dev uvicorn fireworks_rft.remote_server:app \
+  --host 127.0.0.1 \
+  --port 9000
 ```
 
-The browser RFT stretch path is `fireworks_rft/remote_server.py`.
+The default server mode is `CART_SCOUT_REMOTE_MODE=stub`. It returns a deterministic valid
+`PurchasePacket` so the Fireworks `/init` and `/status` contract can be tested without launching a
+browser. This is not the final browser-agent rollout.
+
+For live browsing through the existing HUD CDP harness:
+
+```bash
+export CART_SCOUT_REMOTE_MODE=structured-cdp
+export CART_SCOUT_HUD_RUNTIME=hud
+export HUD_API_KEY=...
+uv run --extra dev uvicorn fireworks_rft.remote_server:app \
+  --host 0.0.0.0 \
+  --port 9000
+```
+
+For a local Docker HUD substrate, use TCP instead:
+
+```bash
+NOVNC_PORT=8082 ./scripts/run_local_env.sh
+export CART_SCOUT_REMOTE_MODE=structured-cdp
+export CART_SCOUT_HUD_RUNTIME=tcp
+export CART_SCOUT_HUD_RUNTIME_URL=tcp://127.0.0.1:8765
+uv run --extra dev uvicorn fireworks_rft.remote_server:app \
+  --host 127.0.0.1 \
+  --port 9000
+```
+
+In `structured-cdp` mode the remote server builds a one-row HUD `shopping-context` task from the
+incoming `ShoppingTaskSpec`, runs `StructuredCDPAgent` against HUD's CDP capability, then scores the
+agent's final `PurchasePacket`. `browser-use` remains available as an alternate mode, but structured
+CDP is the intended GRPO rollout path.
+
+To create the task-only Eval Protocol rows without launching a Fireworks job:
+
+```bash
+uv run --extra dev python train_hud.py --poc --skip-train
+```
+
+To dry-run a Fireworks POC against a deployed remote server:
+
+```bash
+export EP_REMOTE_ROLLOUT_PROCESSOR_BASE_URL=https://your-public-rollout-server.example
+uv run --extra dev python train_hud.py --poc --dry-run
+```
+
+To launch a small POC job:
+
+```bash
+uv run --extra dev python train_hud.py --poc
+```
+
+`--poc` uses 16 task rows, chunk size 4, 2 response candidates, and
+`accounts/fireworks/models/qwen3-vl-8b-instruct` for the smoke base model. If your Fireworks account
+has a private Qwen3-VL-4B model, pass it explicitly:
+
+```bash
+uv run --extra dev python train_hud.py --poc \
+  --base-model accounts/fireworks/models/qwen3-vl-4b-instruct \
+  --output-model cart-scout-qwen3-vl-4b-remote-poc-grpo
+```
+
+To train the target shopping agent:
+
+```bash
+uv run --extra dev python train_hud.py \
+  --remote-base-url https://your-public-rollout-server.example
+```
+
+The default target base model is `accounts/fireworks/models/qwen3-vl-32b-instruct`.
+
+This installed `eval-protocol` release does not expose the cookbook's `--remote-server-url` flag.
+`train_hud.py` passes both `EP_REMOTE_ROLLOUT_PROCESSOR_BASE_URL` and
+`CART_SCOUT_REMOTE_BASE_URL` to local evaluator discovery/upload. The Fireworks evaluator runtime
+also needs one of those environment variables set to the public rollout server URL; otherwise the
+uploaded evaluator falls back to `http://127.0.0.1:9000`, which is only useful for local smoke tests.
+
+Remote rollout TODO:
+
+- Run an end-to-end public-server smoke with `CART_SCOUT_REMOTE_MODE=structured-cdp`.
+- Tune structured CDP settings for Qwen3-VL rollouts: max steps, sampling params, screenshot
+  tracing, and timeout values.
+- Add trace/snapshot-backed evidence checks on top of `score_grpo_packet(...)`.
+- Replace in-memory rollout status with durable storage before running high-volume jobs.
+
+The lower-level Fireworks Training API RL cookbook is still a separate future path. It uses
+`async_rl_loop`, where the project would provide browser rollouts that return token ids, logprobs,
+loss masks, and scalar rewards, then configure `policy_loss="grpo"` in `train.py`.
