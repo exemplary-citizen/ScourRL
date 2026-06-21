@@ -4,10 +4,13 @@ import pytest
 
 from cart_scout.structured_cdp import (
     extract_first_json_object,
+    observation_progress,
     parse_structured_action,
     retailer_search_url,
+    shaping_reward,
     strip_reasoning,
 )
+from cart_scout.schema import ShoppingTaskSpec
 
 
 def test_parse_structured_action_strips_think_and_markdown():
@@ -75,3 +78,62 @@ def test_retailer_search_url():
     assert retailer_search_url("target.com", "printer paper") == "https://www.target.com/s?searchTerm=printer+paper"
     with pytest.raises(ValueError):
         retailer_search_url("google", "usb c charger")
+
+
+def test_observation_progress_rewards_information_not_actions():
+    task = ShoppingTaskSpec(
+        task_id="usb",
+        instruction="Find a USB-C charger under $40.",
+        allowed_domains=["target.com", "amazon.com"],
+        max_price=40,
+        must_have=["USB-C", "Power Delivery", "30W"],
+        must_not_have=["Lightning"],
+    )
+    empty = observation_progress(
+        {
+            "url": "https://www.target.com/s?searchTerm=usb+c+charger",
+            "title": "Target search",
+            "text": "Search results",
+            "refs": [],
+        },
+        task,
+        visited_urls=1,
+    )
+    richer = observation_progress(
+        {
+            "url": "https://www.target.com/p/example",
+            "title": "Anker 30W USB-C Charger",
+            "text": "$19.99 Rapid USB-C Power Delivery 30W wall charger. Shipping available.",
+            "refs": [{"text": "Anker 30W USB-C Charger $19.99"}],
+        },
+        task,
+        visited_urls=2,
+    )
+
+    assert richer.score > empty.score
+    assert richer.price_found
+    assert richer.must_have_hits == ("USB-C", "Power Delivery", "30W")
+    assert richer.evidence_like
+
+
+def test_shaping_reward_penalizes_unsafe_and_repeated_actions():
+    task = ShoppingTaskSpec(
+        task_id="usb",
+        instruction="Find a USB-C charger under $40.",
+        allowed_domains=["target.com"],
+        max_price=40,
+        must_have=["USB-C"],
+        must_not_have=[],
+    )
+    previous = observation_progress({"url": "https://www.target.com", "text": "", "refs": []}, task)
+    current = observation_progress(
+        {"url": "https://www.target.com", "text": "", "refs": []},
+        task,
+        unsafe_attempts=1,
+        repeated_actions=1,
+    )
+    shape = shaping_reward(step=2, action_name="click_ref", previous=previous, current=current)
+
+    assert shape.dense_reward < 0
+    assert "unsafe_attempt" in shape.reasons
+    assert "repeated_action" in shape.reasons

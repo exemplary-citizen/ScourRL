@@ -338,6 +338,23 @@ r_t = progress_potential(packet_next, task) - progress_potential(packet_prev, ta
 
 This rewards new verified information, not clicks.
 
+The structured CDP harness also records per-step progress telemetry in HUD traces. It does not change
+terminal HUD reward, but each `structured_cdp.*` tool result includes:
+
+- progress score before and after the action
+- allowed-domain state
+- price found
+- must-have terms visible in the observation
+- evidence-like signal
+- unsafe attempt count
+- repeated-action and no-op counts
+- dense shaping reward for offline training/debugging
+
+Known shaping smoke job:
+
+- `https://hud.ai/jobs/9cc1972751a14cb4b97cb93191b95def` - DeepSeek structured CDP run, reward `1.0`,
+  includes `progress`, `shaping_rows`, and `dense_reward_sum` in trace extra.
+
 ## Fireworks RFT Path
 
 Use `fireworks_rft/evaluator.py` for the simpler 24-hour path:
