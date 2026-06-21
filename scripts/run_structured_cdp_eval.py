@@ -95,17 +95,22 @@ class StructuredCDPAgent(Agent):
         shaping_rows: list[dict[str, Any]] = []
         stop_watch = asyncio.Event()
         watch_task: asyncio.Task[None] | None = None
-        if self.rfb_watch_interval > 0:
-            watch_task = asyncio.create_task(_record_rfb_watch(run, stop_watch, self.rfb_watch_interval))
 
         async with async_playwright() as p:
             browser = await p.chromium.connect_over_cdp(cdp_url)
             try:
                 context = browser.contexts[0] if browser.contexts else await browser.new_context()
                 page = context.pages[0] if context.pages else await context.new_page()
+                await page.bring_to_front()
+                if self.rfb_watch_interval > 0:
+                    watch_task = asyncio.create_task(
+                        _record_rfb_watch(run, stop_watch, self.rfb_watch_interval, page=page)
+                    )
                 answer: str | None = None
 
                 for step in range(1, self.max_steps + 1):
+                    with contextlib.suppress(Exception):
+                        await page.bring_to_front()
                     observation = await _observe_page(page)
                     progress_before = observation_progress(
                         observation,
@@ -321,7 +326,7 @@ async def _chat_completion(
     raise last_exc
 
 
-async def _record_rfb_watch(run: Any, stop: asyncio.Event, interval_s: float) -> None:
+async def _record_rfb_watch(run: Any, stop: asyncio.Event, interval_s: float, *, page: Any | None = None) -> None:
     try:
         rfb = await run.client.open("rfb/3.8")
     except Exception as exc:
@@ -331,6 +336,10 @@ async def _record_rfb_watch(run: Any, stop: asyncio.Event, interval_s: float) ->
     try:
         while not stop.is_set():
             try:
+                if page is not None:
+                    with contextlib.suppress(Exception):
+                        await page.bring_to_front()
+                        await page.wait_for_timeout(100)
                 png = await rfb.screenshot_png()
                 image_b64 = base64.b64encode(png).decode("ascii")
                 call = MCPToolCall(name="structured_cdp.browser_snapshot", arguments={"tick": tick})
