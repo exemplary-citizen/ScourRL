@@ -378,8 +378,8 @@ def _messages_with_final_answer(messages: list[Message], final_answer: str) -> l
 
 
 def _message_to_dict(message: Message) -> dict[str, Any]:
-    if hasattr(message, "dump_mdoel_for_chat_completion_request"):
-        return message.dump_mdoel_for_chat_completion_request()
+    if hasattr(message, "dump_model_for_chat_completion_request"):
+        return message.dump_model_for_chat_completion_request()
     return message.model_dump(exclude_none=True, mode="json")
 
 

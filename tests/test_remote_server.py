@@ -146,6 +146,8 @@ def test_browser_use_mode_runs_existing_hud_harness(monkeypatch) -> None:
     assert seen["agent"].use_thinking is False
     assert seen["agent"].use_vision is True
     assert seen["agent"].llm_temperature == 0.7
+    assert seen["agent"].llm_top_p == 0.95
+    assert seen["agent"].max_completion_tokens == 1024
     assert seen["agent"].reasoning_effort == "none"
 
 
@@ -223,6 +225,8 @@ def test_structured_cdp_mode_runs_existing_hud_harness(monkeypatch) -> None:
     assert seen["agent"].base_url == "https://tracing.fireworks.ai"
     assert seen["agent"].max_steps == 5
     assert seen["agent"].temperature == 0.7
+    assert seen["agent"].top_p == 0.95
+    assert seen["agent"].max_tokens == 1024
     assert seen["agent"].reasoning_effort == "none"
 
 
@@ -232,6 +236,8 @@ def _init_payload(task: ShoppingTaskSpec) -> dict:
         "completion_params": {
             "model": "accounts/fireworks/models/qwen3-vl-8b-instruct",
             "temperature": 0.7,
+            "top_p": 0.95,
+            "max_tokens": 1024,
         },
         "messages": [
             message.model_dump(exclude_none=True, mode="json") for message in row.messages

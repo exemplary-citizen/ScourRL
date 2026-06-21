@@ -35,7 +35,41 @@ uv run hud eval tasks.py claude \
 This is easiest to watch, but it trains/debugs a desktop action space, not the CDP browser action
 space we want for open-source RL.
 
-### 2. Browser Use CDP With RFB Watch
+### 2. Structured CDP Harness
+
+Use this when the priority is the trainable browser-native action contract:
+
+```bash
+set -a; source .env; set +a
+uv run python scripts/run_structured_cdp_eval.py \
+  --model deepseek-ai/DeepSeek-V3.1 \
+  --api-key-env HUD_API_KEY \
+  --base-url https://inference.beta.hud.ai \
+  --task-id usb-c-charger-30w-under-40 \
+  --max-steps 8
+```
+
+Expected trace shape:
+
+- `agent_message` rows contain the observation summary, progress state, raw model output, parsed action, and parse error if any.
+- `tool_call` rows named `structured_cdp.*` contain action results, progress deltas, dense shaping rewards, and screenshots.
+- The final answer is emitted only through `emit_packet`, so the task grader sees the required packet JSON.
+
+The structured action set covers basic browser navigation and interaction: open URL, retailer search,
+click observed refs, fill observed inputs, press keys, scroll, go back, extract page text, find text,
+capture a screenshot, emit the final packet, and stop.
+
+Progress telemetry separates `search` and `product` evidence sources. URL/query text does not count
+as product evidence; search-result observations can provide discounted progress, and product pages
+provide stronger evidence credit.
+
+Known structured CDP smoke job:
+
+- `https://hud.ai/jobs/fa38c6b655294b10aa60cb0c0ccd889c` - DeepSeek structured CDP run, reward `0.975`.
+- `https://hud.ai/jobs/9cc1972751a14cb4b97cb93191b95def` - DeepSeek structured CDP run with progress
+  telemetry, reward `1.0`.
+
+### 3. Browser Use CDP With RFB Watch
 
 Use this when the priority is the trainable browser-native harness plus enough screenshots to debug:
 
@@ -91,6 +125,20 @@ Then run the CDP harness against the local control channel:
 
 ```bash
 set -a; source .env; set +a
+uv run python scripts/run_structured_cdp_eval.py \
+  --runtime tcp \
+  --runtime-url tcp://127.0.0.1:8765 \
+  --model deepseek-ai/DeepSeek-V3.1 \
+  --api-key-env HUD_API_KEY \
+  --base-url https://inference.beta.hud.ai \
+  --task-id usb-c-charger-30w-under-40 \
+  --max-steps 6
+```
+
+Browser Use can still be run locally for comparison:
+
+```bash
+set -a; source .env; set +a
 uv run python scripts/run_browser_use_eval.py \
   --runtime tcp \
   --runtime-url tcp://127.0.0.1:8765 \
@@ -108,11 +156,10 @@ uv run python scripts/run_browser_use_eval.py \
 Use hosted `--runtime hud` only when the local run looks good and you need a shareable platform
 artifact.
 
-## Next Harness Step
+## Harness Direction
 
 Browser Use is a useful baseline and data-collection bridge, but it still hides too much of the
-policy/action contract inside its own loop. For RL, the next harness should expose a small structured
-CDP/DOM action space directly:
+policy/action contract inside its own loop. For RL, prefer the structured CDP/DOM action space:
 
 - `search(query, retailer)`
 - `open_url(url)`

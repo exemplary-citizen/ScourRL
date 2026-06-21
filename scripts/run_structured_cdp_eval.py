@@ -4,10 +4,12 @@ import argparse
 import asyncio
 import base64
 import contextlib
+import ast
 import json
 import logging
 import os
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -20,18 +22,52 @@ from hud.eval.runtime import Runtime as TCPRuntime
 from hud.eval.taskset import Taskset
 from hud.types import MCPToolCall, MCPToolResult, Step
 
+from cart_scout.schema import ShoppingTaskSpec
 from cart_scout.structured_cdp import (
     StructuredAction,
     build_controller_prompt,
     compact_text,
+    observation_progress,
     parse_structured_action,
     retailer_search_url,
+    shaping_reward,
 )
 
 
 LOGGER = logging.getLogger("cart_scout.structured_cdp")
 CDP_PROTOCOL = "cdp/1.3"
 INTERACTIVE_SELECTOR = "a, button, input, textarea, select, [role='button'], [contenteditable='true']"
+
+
+@dataclass
+class _RunStats:
+    visited_urls: set[str] = field(default_factory=set)
+    last_action_key: str | None = None
+    repeated_actions: int = 0
+    no_op_actions: int = 0
+    unsafe_attempts: int = 0
+
+    def note_action(self, action: StructuredAction) -> bool:
+        action_key = json.dumps(action.model_dump(mode="json"), sort_keys=True)
+        repeated = action_key == self.last_action_key
+        if repeated:
+            self.repeated_actions += 1
+        self.last_action_key = action_key
+        return repeated
+
+    def note_result(self, action: StructuredAction, result: dict[str, Any], *, before_url: str) -> None:
+        url = str(result.get("url") or before_url or "")
+        if url:
+            self.visited_urls.add(url)
+        error = str(result.get("error") or "").lower()
+        if "blocked unsafe" in error or "checkout" in error or "payment" in error or "sign in" in error:
+            self.unsafe_attempts += 1
+        if not result.get("ok"):
+            self.no_op_actions += 1
+        if action.action == "scroll":
+            scroll = result.get("scroll") if isinstance(result.get("scroll"), dict) else {}
+            if scroll.get("y") == 0 and str(action.args.get("direction", "down")).lower() == "up":
+                self.no_op_actions += 1
 
 
 @dataclass
@@ -53,6 +89,9 @@ class StructuredCDPAgent(Agent):
         LOGGER.info("structured CDP harness attaching to %s", cdp_url)
         system_prompt = build_controller_prompt(run.prompt_text)
         messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
+        task_spec = _task_spec_from_run(run)
+        run_stats = _RunStats()
+        shaping_rows: list[dict[str, Any]] = []
 
         async with async_playwright() as p:
             browser = await p.chromium.connect_over_cdp(cdp_url)
@@ -63,6 +102,14 @@ class StructuredCDPAgent(Agent):
 
                 for step in range(1, self.max_steps + 1):
                     observation = await _observe_page(page)
+                    progress_before = observation_progress(
+                        observation,
+                        task_spec,
+                        unsafe_attempts=run_stats.unsafe_attempts,
+                        repeated_actions=run_stats.repeated_actions,
+                        no_op_actions=run_stats.no_op_actions,
+                        visited_urls=len(run_stats.visited_urls),
+                    )
                     messages.append(
                         {
                             "role": "user",
@@ -71,6 +118,7 @@ class StructuredCDPAgent(Agent):
                                     "step": step,
                                     "max_steps": self.max_steps,
                                     "observation": observation,
+                                    "progress": _progress_payload(progress_before),
                                     "instruction": "Return exactly one action JSON object.",
                                 },
                                 ensure_ascii=True,
@@ -96,6 +144,7 @@ class StructuredCDPAgent(Agent):
                                     "harness": "structured-cdp",
                                     "step": step,
                                     "observation": _observation_summary(observation),
+                                    "progress": _progress_payload(progress_before),
                                     "raw_model_output": raw,
                                     "action": action_payload,
                                     "parse_error": parsed.error,
@@ -128,7 +177,31 @@ class StructuredCDPAgent(Agent):
                         continue
 
                     messages.append({"role": "assistant", "content": raw})
+                    repeated = run_stats.note_action(parsed.action)
                     result = await _execute_action(page, parsed.action, observation)
+                    run_stats.note_result(parsed.action, result, before_url=str(observation.get("url") or ""))
+                    next_observation = await _observe_page(page)
+                    progress_after = observation_progress(
+                        next_observation,
+                        task_spec,
+                        unsafe_attempts=run_stats.unsafe_attempts,
+                        repeated_actions=run_stats.repeated_actions,
+                        no_op_actions=run_stats.no_op_actions,
+                        visited_urls=len(run_stats.visited_urls),
+                    )
+                    shape = shaping_reward(
+                        step=step,
+                        action_name=parsed.action.action,
+                        previous=progress_before,
+                        current=progress_after,
+                    )
+                    shape_payload = _shaping_payload(shape, repeated=repeated)
+                    shaping_rows.append(shape_payload)
+                    result["progress"] = {
+                        "before": _progress_payload(progress_before),
+                        "after": _progress_payload(progress_after),
+                        "shaping": shape_payload,
+                    }
                     await _record_tool_step(run, page, parsed.action, result, include_screenshot=self.trace_screenshots)
                     messages.append(
                         {
@@ -137,6 +210,7 @@ class StructuredCDPAgent(Agent):
                                 {
                                     "previous_action": action_payload,
                                     "result": _compact_result(result),
+                                    "progress": shape_payload,
                                     "instruction": "Use the result to choose the next JSON action.",
                                 },
                                 ensure_ascii=True,
@@ -168,6 +242,18 @@ class StructuredCDPAgent(Agent):
                         "model": self.model,
                         "steps": step,
                         "url": page.url,
+                        "progress": _progress_payload(
+                            observation_progress(
+                                await _observe_page(page),
+                                task_spec,
+                                unsafe_attempts=run_stats.unsafe_attempts,
+                                repeated_actions=run_stats.repeated_actions,
+                                no_op_actions=run_stats.no_op_actions,
+                                visited_urls=len(run_stats.visited_urls),
+                            )
+                        ),
+                        "shaping_rows": shaping_rows,
+                        "dense_reward_sum": round(sum(row["dense_reward"] for row in shaping_rows), 6),
                     }
                 )
                 run.record(AgentStep(content=answer, done=True, error=None if answer else "no answer emitted"))
@@ -205,7 +291,7 @@ async def _chat_completion(
         payload["top_p"] = top_p
     if max_tokens is not None:
         payload["max_tokens"] = max_tokens
-    if reasoning_effort is not None:
+    if reasoning_effort and reasoning_effort != "none":
         payload["reasoning_effort"] = reasoning_effort
     last_exc: Exception | None = None
     async with httpx.AsyncClient(timeout=120.0) as client:
@@ -230,6 +316,67 @@ def _message_window(messages: list[dict[str, str]], max_tail: int = 6) -> list[d
     if len(messages) <= max_tail + 1:
         return messages
     return [messages[0], *messages[-max_tail:]]
+
+
+def _task_spec_from_run(run: Any) -> ShoppingTaskSpec:
+    prompt = str(getattr(run, "prompt_text", "") or "")
+    return ShoppingTaskSpec(
+        task_id=_match_text(prompt, r"Task:\s*(.*?)\n\nConstraints:", default="structured-cdp-task"),
+        instruction=_match_text(prompt, r"Task:\s*(.*?)\n\nConstraints:", default=prompt[:240]),
+        max_price=float(_match_text(prompt, r"Max price:\s*\$([0-9]+(?:\.[0-9]+)?)", default="0") or 0),
+        must_have=_match_list(prompt, "Must have"),
+        must_not_have=_match_list(prompt, "Must not have"),
+        allowed_domains=_match_list(prompt, "Allowed domains") or ["target.com", "amazon.com"],
+        require_cart=_match_text(prompt, r"Cart prep required:\s*(True|False)", default="False") == "True",
+    )
+
+
+def _match_text(text: str, pattern: str, *, default: str) -> str:
+    match = re.search(pattern, text, flags=re.DOTALL)
+    if not match:
+        return default
+    return match.group(1).strip()
+
+
+def _match_list(text: str, label: str) -> list[str]:
+    match = re.search(rf"{re.escape(label)}:\s*(\[.*?\])", text)
+    if not match:
+        return []
+    try:
+        value = ast.literal_eval(match.group(1))
+    except (SyntaxError, ValueError):
+        return []
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value]
+
+
+def _progress_payload(progress: Any) -> dict[str, Any]:
+    return {
+        "score": round(progress.score, 6),
+        "allowed_domain": progress.allowed_domain,
+        "price_found": progress.price_found,
+        "must_have_hits": list(progress.must_have_hits),
+        "evidence_source": progress.evidence_source,
+        "evidence_like": progress.evidence_like,
+        "unsafe_attempts": progress.unsafe_attempts,
+        "repeated_actions": progress.repeated_actions,
+        "no_op_actions": progress.no_op_actions,
+        "visited_urls": progress.visited_urls,
+    }
+
+
+def _shaping_payload(shape: Any, *, repeated: bool) -> dict[str, Any]:
+    return {
+        "step": shape.step,
+        "action": shape.action,
+        "previous_score": round(shape.previous_score, 6),
+        "next_score": round(shape.next_score, 6),
+        "dense_reward": round(shape.dense_reward, 6),
+        "reasons": list(shape.reasons),
+        "repeated": repeated,
+        "state": _progress_payload(shape.state),
+    }
 
 
 async def _observe_page(page: Any) -> dict[str, Any]:
@@ -431,6 +578,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--base-url", default="https://inference.beta.hud.ai")
     parser.add_argument("--max-steps", type=int, default=12)
     parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--top-p", type=float, default=None)
+    parser.add_argument("--max-tokens", type=int, default=None)
+    parser.add_argument("--reasoning-effort", default=None)
     parser.add_argument("--runtime-timeout", type=float, default=1800.0)
     parser.add_argument("--rollout-timeout", type=float, default=1800.0)
     parser.add_argument("--no-trace-screenshots", action="store_true")
@@ -454,6 +604,9 @@ async def main() -> None:
         api_key=api_key,
         base_url=args.base_url,
         temperature=args.temperature,
+        top_p=args.top_p,
+        max_tokens=args.max_tokens,
+        reasoning_effort=args.reasoning_effort,
         trace_screenshots=not args.no_trace_screenshots,
     )
     runtime = (
