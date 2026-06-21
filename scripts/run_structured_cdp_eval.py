@@ -81,6 +81,7 @@ class StructuredCDPAgent(Agent):
     max_tokens: int | None = None
     reasoning_effort: str | None = None
     trace_screenshots: bool = True
+    rfb_watch_interval: float = 0.0
 
     async def __call__(self, run):
         from playwright.async_api import async_playwright
@@ -92,6 +93,10 @@ class StructuredCDPAgent(Agent):
         task_spec = _task_spec_from_run(run)
         run_stats = _RunStats()
         shaping_rows: list[dict[str, Any]] = []
+        stop_watch = asyncio.Event()
+        watch_task: asyncio.Task[None] | None = None
+        if self.rfb_watch_interval > 0:
+            watch_task = asyncio.create_task(_record_rfb_watch(run, stop_watch, self.rfb_watch_interval))
 
         async with async_playwright() as p:
             browser = await p.chromium.connect_over_cdp(cdp_url)
@@ -263,6 +268,10 @@ class StructuredCDPAgent(Agent):
                 run.trace.content = json.dumps({"error": str(exc)}, ensure_ascii=True)
                 run.record(Step(source="system", error=str(exc)))
             finally:
+                stop_watch.set()
+                if watch_task is not None:
+                    with contextlib.suppress(Exception):
+                        await asyncio.wait_for(watch_task, timeout=5.0)
                 await browser.close()
 
 
@@ -310,6 +319,38 @@ async def _chat_completion(
                 await asyncio.sleep(1.5 * (attempt + 1))
     assert last_exc is not None
     raise last_exc
+
+
+async def _record_rfb_watch(run: Any, stop: asyncio.Event, interval_s: float) -> None:
+    try:
+        rfb = await run.client.open("rfb/3.8")
+    except Exception as exc:
+        LOGGER.warning("could not open RFB watch stream: %s", exc)
+        return
+    tick = 0
+    try:
+        while not stop.is_set():
+            try:
+                png = await rfb.screenshot_png()
+                image_b64 = base64.b64encode(png).decode("ascii")
+                call = MCPToolCall(name="structured_cdp.browser_snapshot", arguments={"tick": tick})
+                result = MCPToolResult(
+                    call_id=call.id,
+                    content=[
+                        mcp_types.TextContent(type="text", text=f"structured CDP browser snapshot {tick}"),
+                        mcp_types.ImageContent(type="image", mimeType="image/png", data=image_b64),
+                    ],
+                    isError=False,
+                )
+                run.record(ToolStep(call=call, result=result))
+            except Exception as exc:
+                LOGGER.warning("RFB watch snapshot failed: %s", exc)
+            tick += 1
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(stop.wait(), timeout=interval_s)
+    finally:
+        with contextlib.suppress(Exception):
+            await rfb.close()
 
 
 def _message_window(messages: list[dict[str, str]], max_tail: int = 6) -> list[dict[str, str]]:
@@ -584,6 +625,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--runtime-timeout", type=float, default=1800.0)
     parser.add_argument("--rollout-timeout", type=float, default=1800.0)
     parser.add_argument("--no-trace-screenshots", action="store_true")
+    parser.add_argument(
+        "--rfb-watch-interval",
+        type=float,
+        default=0.0,
+        help="Also record RFB desktop screenshots every N seconds for debugging. Disabled by default.",
+    )
     parser.add_argument("--runtime", choices=["hud", "tcp"], default="hud")
     parser.add_argument("--runtime-url", default="tcp://127.0.0.1:8765")
     return parser.parse_args()
@@ -608,6 +655,7 @@ async def main() -> None:
         max_tokens=args.max_tokens,
         reasoning_effort=args.reasoning_effort,
         trace_screenshots=not args.no_trace_screenshots,
+        rfb_watch_interval=args.rfb_watch_interval,
     )
     runtime = (
         HUDRuntime(run_timeout=args.runtime_timeout)

@@ -183,7 +183,7 @@ uv run python scripts/run_structured_cdp_eval.py \
   --base-url https://inference.beta.hud.ai \
   --task-id usb-c-charger-30w-under-40 \
   --max-steps 8 \
-  --no-trace-screenshots
+  --rfb-watch-interval 3
 ```
 
 Local HUD TCP substrate:
@@ -199,7 +199,7 @@ uv run python scripts/run_structured_cdp_eval.py \
   --base-url https://inference.beta.hud.ai \
   --task-id usb-c-charger-30w-under-40 \
   --max-steps 8 \
-  --no-trace-screenshots
+  --rfb-watch-interval 3
 ```
 
 Known smoke:
@@ -434,10 +434,12 @@ incoming `ShoppingTaskSpec`, runs `StructuredCDPAgent` against HUD's CDP capabil
 agent's final `PurchasePacket`. `browser-use` remains available as an alternate mode, but structured
 CDP is the intended GRPO rollout path.
 
-Remote browser modes record screenshots on each browser action by default, matching the direct
-structured CDP smoke-test harness so HUD jobs show what the agent is doing. Set
-`CART_SCOUT_STRUCTURED_TRACE_SCREENSHOTS=false` or `CART_SCOUT_BROWSER_TRACE_SCREENSHOTS=false`
-only when you intentionally want lower-volume traces.
+Remote browser modes record screenshots on each browser action by default. Structured CDP remote
+runs also record periodic desktop snapshots every 3 seconds by default through HUD's RFB capability,
+matching the high-observability smoke-test viewing experience. Set
+`CART_SCOUT_STRUCTURED_TRACE_SCREENSHOTS=false` or `CART_SCOUT_BROWSER_TRACE_SCREENSHOTS=false` to
+disable action screenshots, and set `CART_SCOUT_STRUCTURED_RFB_WATCH_INTERVAL=0` to disable periodic
+structured-CDP desktop snapshots when you intentionally want lower-volume traces.
 
 To create the task-only Eval Protocol rows without launching a Fireworks job:
 

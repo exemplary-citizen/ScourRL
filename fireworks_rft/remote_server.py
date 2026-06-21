@@ -149,6 +149,7 @@ async def _run_hud_structured_cdp_rollout(
         ),
         reasoning_effort=os.getenv("CART_SCOUT_STRUCTURED_REASONING_EFFORT", "none"),
         trace_screenshots=_env_bool("CART_SCOUT_STRUCTURED_TRACE_SCREENSHOTS", True),
+        rfb_watch_interval=_env_float("CART_SCOUT_STRUCTURED_RFB_WATCH_INTERVAL", 3.0),
     )
     job = await Taskset("cart-scout-fireworks-structured-cdp", [_hud_task_from_spec(task)]).run(
         agent,

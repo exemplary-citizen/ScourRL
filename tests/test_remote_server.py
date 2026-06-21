@@ -230,6 +230,7 @@ def test_structured_cdp_mode_runs_existing_hud_harness(monkeypatch) -> None:
     assert seen["agent"].max_tokens == 1024
     assert seen["agent"].reasoning_effort == "none"
     assert seen["agent"].trace_screenshots is True
+    assert seen["agent"].rfb_watch_interval == 3.0
 
 
 def _init_payload(task: ShoppingTaskSpec) -> dict:
