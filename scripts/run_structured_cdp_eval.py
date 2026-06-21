@@ -77,7 +77,11 @@ class StructuredCDPAgent(Agent):
     api_key: str | None = None
     base_url: str | None = None
     temperature: float = 0.0
+    top_p: float | None = None
+    max_tokens: int | None = None
+    reasoning_effort: str | None = None
     trace_screenshots: bool = True
+    rfb_watch_interval: float = 0.0
 
     async def __call__(self, run):
         from playwright.async_api import async_playwright
@@ -89,15 +93,24 @@ class StructuredCDPAgent(Agent):
         task_spec = _task_spec_from_run(run)
         run_stats = _RunStats()
         shaping_rows: list[dict[str, Any]] = []
+        stop_watch = asyncio.Event()
+        watch_task: asyncio.Task[None] | None = None
 
         async with async_playwright() as p:
             browser = await p.chromium.connect_over_cdp(cdp_url)
             try:
                 context = browser.contexts[0] if browser.contexts else await browser.new_context()
                 page = context.pages[0] if context.pages else await context.new_page()
+                await page.bring_to_front()
+                if self.rfb_watch_interval > 0:
+                    watch_task = asyncio.create_task(
+                        _record_rfb_watch(run, stop_watch, self.rfb_watch_interval, page=page)
+                    )
                 answer: str | None = None
 
                 for step in range(1, self.max_steps + 1):
+                    with contextlib.suppress(Exception):
+                        await page.bring_to_front()
                     observation = await _observe_page(page)
                     progress_before = observation_progress(
                         observation,
@@ -128,6 +141,9 @@ class StructuredCDPAgent(Agent):
                         api_key=self.api_key,
                         base_url=self.base_url,
                         temperature=self.temperature,
+                        top_p=self.top_p,
+                        max_tokens=self.max_tokens,
+                        reasoning_effort=self.reasoning_effort,
                     )
                     parsed = parse_structured_action(raw)
                     action_payload = parsed.action.model_dump(mode="json") if parsed.action else None
@@ -257,6 +273,10 @@ class StructuredCDPAgent(Agent):
                 run.trace.content = json.dumps({"error": str(exc)}, ensure_ascii=True)
                 run.record(Step(source="system", error=str(exc)))
             finally:
+                stop_watch.set()
+                if watch_task is not None:
+                    with contextlib.suppress(Exception):
+                        await asyncio.wait_for(watch_task, timeout=5.0)
                 await browser.close()
 
 
@@ -267,6 +287,9 @@ async def _chat_completion(
     api_key: str | None,
     base_url: str | None,
     temperature: float,
+    top_p: float | None = None,
+    max_tokens: int | None = None,
+    reasoning_effort: str | None = None,
 ) -> str:
     endpoint = (base_url or os.getenv("OPENAI_LIKE_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
     headers = {"Content-Type": "application/json"}
@@ -278,6 +301,12 @@ async def _chat_completion(
         "messages": messages,
         "temperature": temperature,
     }
+    if top_p is not None:
+        payload["top_p"] = top_p
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
+    if reasoning_effort and reasoning_effort != "none":
+        payload["reasoning_effort"] = reasoning_effort
     last_exc: Exception | None = None
     async with httpx.AsyncClient(timeout=120.0) as client:
         for attempt in range(3):
@@ -295,6 +324,42 @@ async def _chat_completion(
                 await asyncio.sleep(1.5 * (attempt + 1))
     assert last_exc is not None
     raise last_exc
+
+
+async def _record_rfb_watch(run: Any, stop: asyncio.Event, interval_s: float, *, page: Any | None = None) -> None:
+    try:
+        rfb = await run.client.open("rfb/3.8")
+    except Exception as exc:
+        LOGGER.warning("could not open RFB watch stream: %s", exc)
+        return
+    tick = 0
+    try:
+        while not stop.is_set():
+            try:
+                if page is not None:
+                    with contextlib.suppress(Exception):
+                        await page.bring_to_front()
+                        await page.wait_for_timeout(100)
+                png = await rfb.screenshot_png()
+                image_b64 = base64.b64encode(png).decode("ascii")
+                call = MCPToolCall(name="structured_cdp.browser_snapshot", arguments={"tick": tick})
+                result = MCPToolResult(
+                    call_id=call.id,
+                    content=[
+                        mcp_types.TextContent(type="text", text=f"structured CDP browser snapshot {tick}"),
+                        mcp_types.ImageContent(type="image", mimeType="image/png", data=image_b64),
+                    ],
+                    isError=False,
+                )
+                run.record(ToolStep(call=call, result=result))
+            except Exception as exc:
+                LOGGER.warning("RFB watch snapshot failed: %s", exc)
+            tick += 1
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(stop.wait(), timeout=interval_s)
+    finally:
+        with contextlib.suppress(Exception):
+            await rfb.close()
 
 
 def _message_window(messages: list[dict[str, str]], max_tail: int = 6) -> list[dict[str, str]]:
@@ -342,6 +407,7 @@ def _progress_payload(progress: Any) -> dict[str, Any]:
         "allowed_domain": progress.allowed_domain,
         "price_found": progress.price_found,
         "must_have_hits": list(progress.must_have_hits),
+        "evidence_source": progress.evidence_source,
         "evidence_like": progress.evidence_like,
         "unsafe_attempts": progress.unsafe_attempts,
         "repeated_actions": progress.repeated_actions,
@@ -562,9 +628,18 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--base-url", default="https://inference.beta.hud.ai")
     parser.add_argument("--max-steps", type=int, default=12)
     parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--top-p", type=float, default=None)
+    parser.add_argument("--max-tokens", type=int, default=None)
+    parser.add_argument("--reasoning-effort", default=None)
     parser.add_argument("--runtime-timeout", type=float, default=1800.0)
     parser.add_argument("--rollout-timeout", type=float, default=1800.0)
     parser.add_argument("--no-trace-screenshots", action="store_true")
+    parser.add_argument(
+        "--rfb-watch-interval",
+        type=float,
+        default=0.0,
+        help="Also record RFB desktop screenshots every N seconds for debugging. Disabled by default.",
+    )
     parser.add_argument("--runtime", choices=["hud", "tcp"], default="hud")
     parser.add_argument("--runtime-url", default="tcp://127.0.0.1:8765")
     return parser.parse_args()
@@ -585,7 +660,11 @@ async def main() -> None:
         api_key=api_key,
         base_url=args.base_url,
         temperature=args.temperature,
+        top_p=args.top_p,
+        max_tokens=args.max_tokens,
+        reasoning_effort=args.reasoning_effort,
         trace_screenshots=not args.no_trace_screenshots,
+        rfb_watch_interval=args.rfb_watch_interval,
     )
     runtime = (
         HUDRuntime(run_timeout=args.runtime_timeout)

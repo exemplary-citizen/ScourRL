@@ -13,6 +13,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "eval-protocol>=0.3.0",
   "pytest>=8.0",
   "pytest-asyncio>=0.23",
 ]
@@ -28,6 +29,7 @@ image = "cart-scout:dev"
 include = [
   "cart_scout/**/*.py",
   "fireworks_rft/**/*.py",
+  "scripts/**/*.py",
   "env.py",
   "tasks.py",
   "train_hud.py",
