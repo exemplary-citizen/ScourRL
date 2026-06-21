@@ -1,0 +1,163 @@
+{
+  "component_mean_excl_hard_zero_rollouts": {
+    "compression": 0.05,
+    "domain": 0.0924,
+    "evidence_quality": 0.1147,
+    "format": 0.05,
+    "must_have": 0.2372,
+    "must_not": 0.0807,
+    "price": 0.1379,
+    "recommendation": 0.0466
+  },
+  "component_zero_rate_excl_hard_zero_rollouts": {
+    "compression": 0.0,
+    "domain": 0.0756,
+    "evidence_quality": 0.0,
+    "format": 0.0,
+    "must_have": 0.0,
+    "must_not": 0.4202,
+    "price": 0.0,
+    "recommendation": 0.0
+  },
+  "fully_solved_tasks_mean_reward_geq_0.8": [
+    {
+      "mean_reward": 0.9287,
+      "task_id": "train_0016_coffee-filters-for-a-small-apartment"
+    },
+    {
+      "mean_reward": 0.8641,
+      "task_id": "train_0003_a-shower-curtain-liner-for-a-budget-restock"
+    },
+    {
+      "mean_reward": 0.847,
+      "task_id": "train_0049_kitchen-trash-bags-for-a-basic-starter-kit"
+    }
+  ],
+  "hard_failure_tasks_all_4_rollouts_zero": [
+    "train_0038_aa-batteries-for-a-compact-setup",
+    "train_0047_measuring-cups-for-a-small-apartment",
+    "train_0048_coffee-filters-for-a-small-apartment"
+  ],
+  "hard_zero_rate_overall": 0.4591,
+  "hard_zero_rollouts_total": 101,
+  "highest_variance_tasks": [
+    {
+      "all_nonzero": false,
+      "all_zero": false,
+      "mean_reward": 0.705,
+      "n_rollouts": 4,
+      "reward_spread": 0.97,
+      "stage": "chunk_1",
+      "task_id": "train_0015_black-ink-pens-for-a-small-apartment"
+    },
+    {
+      "all_nonzero": false,
+      "all_zero": false,
+      "mean_reward": 0.2395,
+      "n_rollouts": 4,
+      "reward_spread": 0.958,
+      "stage": "chunk_2",
+      "task_id": "train_0042_a-storage-bin-for-a-budget-restock"
+    },
+    {
+      "all_nonzero": false,
+      "all_zero": false,
+      "mean_reward": 0.4878,
+      "n_rollouts": 8,
+      "reward_spread": 0.94,
+      "stage": "smoke_test",
+      "task_id": "train_0002_a-cutting-board-for-a-small-apartment"
+    },
+    {
+      "all_nonzero": false,
+      "all_zero": false,
+      "mean_reward": 0.5913,
+      "n_rollouts": 4,
+      "reward_spread": 0.94,
+      "stage": "chunk_2",
+      "task_id": "train_0041_a-usb-c-charging-cable-for-a-basic-starter-kit"
+    },
+    {
+      "all_nonzero": false,
+      "all_zero": false,
+      "mean_reward": 0.2735,
+      "n_rollouts": 8,
+      "reward_spread": 0.925,
+      "stage": "smoke_test",
+      "task_id": "train_0005_a-usb-c-charging-cable-for-everyday-household-us"
+    },
+    {
+      "all_nonzero": false,
+      "all_zero": false,
+      "mean_reward": 0.446,
+      "n_rollouts": 4,
+      "reward_spread": 0.925,
+      "stage": "chunk_1",
+      "task_id": "train_0006_an-insulated-lunch-bag-for-a-basic-starter-kit"
+    },
+    {
+      "all_nonzero": false,
+      "all_zero": false,
+      "mean_reward": 0.2313,
+      "n_rollouts": 4,
+      "reward_spread": 0.925,
+      "stage": "chunk_1",
+      "task_id": "train_0018_an-indoor-extension-cord-for-a-basic-starter-kit"
+    },
+    {
+      "all_nonzero": false,
+      "all_zero": false,
+      "mean_reward": 0.65,
+      "n_rollouts": 4,
+      "reward_spread": 0.925,
+      "stage": "chunk_1",
+      "task_id": "train_0020_sticky-notes-for-a-budget-restock"
+    },
+    {
+      "all_nonzero": false,
+      "all_zero": false,
+      "mean_reward": 0.2313,
+      "n_rollouts": 4,
+      "reward_spread": 0.925,
+      "stage": "chunk_2",
+      "task_id": "train_0027_an-indoor-extension-cord-for-a-dorm-room"
+    },
+    {
+      "all_nonzero": false,
+      "all_zero": false,
+      "mean_reward": 0.6938,
+      "n_rollouts": 4,
+      "reward_spread": 0.925,
+      "stage": "chunk_2",
+      "task_id": "train_0032_coffee-filters-for-everyday-household-use"
+    }
+  ],
+  "stage_summaries": [
+    {
+      "hard_zero_rate": 0.6,
+      "hard_zero_rollouts": 12,
+      "infra_run_failures": 1,
+      "rollouts_logged": 20,
+      "row_range": "rows 0-4",
+      "stage": "smoke_test"
+    },
+    {
+      "hard_zero_rate": 0.41,
+      "hard_zero_rollouts": 41,
+      "infra_run_failures": 11,
+      "rollouts_logged": 100,
+      "row_range": "rows 0-24",
+      "stage": "chunk_1"
+    },
+    {
+      "hard_zero_rate": 0.48,
+      "hard_zero_rollouts": 48,
+      "infra_run_failures": 14,
+      "rollouts_logged": 100,
+      "row_range": "rows 25-49",
+      "stage": "chunk_2"
+    }
+  ],
+  "total_rollouts": 220,
+  "total_tasks": 50
+}
