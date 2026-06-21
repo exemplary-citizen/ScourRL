@@ -149,6 +149,7 @@ def test_browser_use_mode_runs_existing_hud_harness(monkeypatch) -> None:
     assert seen["agent"].llm_top_p == 0.95
     assert seen["agent"].max_completion_tokens == 1024
     assert seen["agent"].reasoning_effort == "none"
+    assert seen["agent"].trace_screenshots is True
 
 
 def test_structured_cdp_mode_runs_existing_hud_harness(monkeypatch) -> None:
@@ -228,6 +229,7 @@ def test_structured_cdp_mode_runs_existing_hud_harness(monkeypatch) -> None:
     assert seen["agent"].top_p == 0.95
     assert seen["agent"].max_tokens == 1024
     assert seen["agent"].reasoning_effort == "none"
+    assert seen["agent"].trace_screenshots is True
 
 
 def _init_payload(task: ShoppingTaskSpec) -> dict:

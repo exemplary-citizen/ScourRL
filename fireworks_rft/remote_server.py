@@ -148,7 +148,7 @@ async def _run_hud_structured_cdp_rollout(
             or completion_params.get("max_output_tokens")
         ),
         reasoning_effort=os.getenv("CART_SCOUT_STRUCTURED_REASONING_EFFORT", "none"),
-        trace_screenshots=_env_bool("CART_SCOUT_STRUCTURED_TRACE_SCREENSHOTS", False),
+        trace_screenshots=_env_bool("CART_SCOUT_STRUCTURED_TRACE_SCREENSHOTS", True),
     )
     job = await Taskset("cart-scout-fireworks-structured-cdp", [_hud_task_from_spec(task)]).run(
         agent,
@@ -205,7 +205,7 @@ async def _run_hud_browser_use_rollout(
         use_vision=_env_bool("CART_SCOUT_BROWSER_USE_VISION", True),
         use_thinking=_env_bool("CART_SCOUT_BROWSER_USE_THINKING", False),
         flash_mode=_env_bool("CART_SCOUT_BROWSER_FLASH_MODE", True),
-        trace_screenshots=_env_bool("CART_SCOUT_BROWSER_TRACE_SCREENSHOTS", False),
+        trace_screenshots=_env_bool("CART_SCOUT_BROWSER_TRACE_SCREENSHOTS", True),
         generate_gif=_env_bool("CART_SCOUT_BROWSER_GENERATE_GIF", False),
         rfb_watch_interval=_env_float("CART_SCOUT_BROWSER_RFB_WATCH_INTERVAL", 0.0),
     )
